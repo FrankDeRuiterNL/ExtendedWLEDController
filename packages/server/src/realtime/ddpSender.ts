@@ -88,6 +88,14 @@ export class DdpSender {
   private tickBusy = false;
   private tickCount = 0;
 
+  /** Master output level 0..1, scaled onto every channel just before packetizing
+   *  — the rundown's fade-to/from-black. Interpolated in-tick so it costs no
+   *  extra timer and stays frame-rate matched. */
+  private levelFrom = 1;
+  private levelTo = 1;
+  private levelStartMs = 0;
+  private levelDurMs = 0;
+
   constructor(opts: DdpSenderOptions = {}) {
     this.fps = Math.min(60, Math.max(1, opts.fps ?? 40));
     this.minDeviceFps = opts.minDeviceFps ?? 12;
@@ -112,6 +120,31 @@ export class DdpSender {
   /** Swap the frame producer mid-stream (e.g. the scene or layout changed). */
   setProducer(producer: FrameProducer): void {
     this.producer = producer;
+  }
+
+  /** Current master output level (0..1), interpolating an in-flight fade. */
+  get masterLevel(): number {
+    if (this.levelDurMs <= 0) return this.levelTo;
+    const p = (Date.now() - this.levelStartMs) / this.levelDurMs;
+    if (p <= 0) return this.levelFrom;
+    if (p >= 1) return this.levelTo;
+    return this.levelFrom + (this.levelTo - this.levelFrom) * p;
+  }
+
+  /** Jump the master output level (0..1) with no ramp. */
+  setMasterLevel(level: number): void {
+    const l = level < 0 ? 0 : level > 1 ? 1 : level;
+    this.levelFrom = l;
+    this.levelTo = l;
+    this.levelDurMs = 0;
+  }
+
+  /** Ramp the master output level to `level` (0..1) over `ms`, from wherever it is now. */
+  fadeTo(level: number, ms: number): void {
+    this.levelFrom = this.masterLevel;
+    this.levelTo = level < 0 ? 0 : level > 1 ? 1 : level;
+    this.levelStartMs = Date.now();
+    this.levelDurMs = Math.max(0, ms);
   }
 
   /** Replace the target list mid-stream (e.g. a device went offline). */
@@ -141,6 +174,7 @@ export class DdpSender {
     this.stats.clear();
     this.setTargets(targets);
     this.producer = producer;
+    this.setMasterLevel(1);
     this.startMs = Date.now();
     this.seq = 1;
     this.tickCount = 0;
@@ -172,6 +206,8 @@ export class DdpSender {
     const tMs = now - this.startMs;
     const frameSeq = this.seq;
     this.seq = nextDdpSequence(this.seq);
+    // One master level for the whole frame (rundown fade); 1 = no-op.
+    const master = this.masterLevel;
 
     try {
       for (const target of this.targets) {
@@ -221,6 +257,12 @@ export class DdpSender {
             data[o + 1] = Math.round(data[o + 1]! * gg);
             data[o + 2] = Math.round(data[o + 2]! * gb);
           }
+        }
+
+        // Master fade level (rundown): scale EVERY channel, W included — a fade
+        // to black must actually reach black on RGBW strips too.
+        if (master < 1) {
+          for (let o = 0; o < data.length; o++) data[o] = Math.round(data[o]! * master);
         }
 
         // Transport is decided upstream (see `StreamService.targetFor`), which

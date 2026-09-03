@@ -83,6 +83,34 @@ describe('DdpSender transport routing', () => {
     expect([...body.subarray(3, 6)]).toEqual([200, 100, 50]);
   });
 
+  it('scales every channel by the master level (rundown fade)', async () => {
+    const rx = await receiver(14051);
+    sender = new DdpSender({ fps: 40 });
+    sender.start([target({ ddpPort: 14051, ledCount: 2 })], solidFrameProducer([200, 100, 40]));
+    sender.setMasterLevel(0.5);
+    await wait(120);
+    rx.close();
+
+    const body = rx.packets[rx.packets.length - 1]!.subarray(10);
+    expect([...body.subarray(0, 3)]).toEqual([100, 50, 20]);
+  });
+
+  it('fadeTo ramps the master level toward the target over time', async () => {
+    const rx = await receiver(14052);
+    sender = new DdpSender({ fps: 40 });
+    sender.setMasterLevel(1);
+    sender.start([target({ ddpPort: 14052, ledCount: 1 })], solidFrameProducer([100, 100, 100]));
+    sender.fadeTo(0, 400);
+    await wait(200); // ~halfway
+    const mid = sender.masterLevel;
+    await wait(400); // well past the end
+    rx.close();
+
+    expect(mid).toBeGreaterThan(0.2);
+    expect(mid).toBeLessThan(0.8);
+    expect(sender.masterLevel).toBe(0);
+  });
+
   it('honours a per-device fps cap (roughly)', async () => {
     const rx = await receiver(14049);
     sender = new DdpSender({ fps: 40 });

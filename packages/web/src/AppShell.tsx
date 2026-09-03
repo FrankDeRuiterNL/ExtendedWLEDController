@@ -98,6 +98,7 @@ export function AppShell() {
                 { to: '/layout', label: 'Layout' },
                 { to: '/hardware', label: 'Hardware' },
                 { to: '/studio', label: 'Scenes' },
+                { to: '/rundown', label: 'Rundown' },
                 { to: '/paint', label: 'Paint' },
                 { to: '/stage', label: 'System' },
               ].map((n) => (

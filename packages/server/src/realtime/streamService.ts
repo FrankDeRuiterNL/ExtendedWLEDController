@@ -108,6 +108,15 @@ export class StreamService {
   private streamingIds = new Set<number>();
   /** When set, solid/pattern drive ONLY this device (per-device test stream). */
   private soloId: number | null = null;
+  /**
+   * Called just before a NON-rundown stream takes over (manual scene / solid /
+   * pattern / paint). The RundownEngine hooks this to halt playback so its
+   * pending cue timers can't fire onto a stream someone else now owns.
+   */
+  onExternalStreamStart?: () => void;
+  /** Called after the stream is torn down (any `stop()`), so the RundownEngine
+   *  can drop its playhead when the wire goes quiet. */
+  onStopped?: () => void;
 
   constructor(
     db: Db,
@@ -301,6 +310,7 @@ export class StreamService {
    * from a scene stream) releases the previous device(s) back to their preset.
    */
   startPaint(input: PaintStream): StreamStatusDTO {
+    this.onExternalStreamStart?.();
     const row = this.repo.get(input.deviceId);
     const target = row && row.enabled !== 0 ? this.targetFor(row) : null;
     if (!target) {
@@ -336,6 +346,7 @@ export class StreamService {
    * disturbing the rest.
    */
   startSolid(color: [number, number, number], deviceId?: number): StreamStatusDTO {
+    this.onExternalStreamStart?.();
     this.color = color;
     this.scene = null;
     this.paint = null;
@@ -375,6 +386,7 @@ export class StreamService {
    * reversed run on the strip. A solid colour can't reveal any of that.
    */
   startPattern(): StreamStatusDTO {
+    this.onExternalStreamStart?.();
     this.color = null;
     this.soloId = null;
     this.mode = 'pattern';
@@ -392,6 +404,45 @@ export class StreamService {
    * keystroke and keep the wall identical to the preview.
    */
   startScene(scene: Scene): StreamStatusDTO {
+    this.onExternalStreamStart?.();
+    return this.streamScene(scene);
+  }
+
+  /**
+   * Put a scene on the wire for the RundownEngine. Same as {@link startScene} but
+   * it does NOT halt the rundown (the engine is the caller) and it leaves the
+   * master level alone so the engine can fade it — `startScene`/`start` reset it
+   * to 1, the engine sets 0 (and fades up) or 1 itself around this call.
+   */
+  streamRundownCue(scene: Scene): StreamStatusDTO {
+    return this.streamScene(scene);
+  }
+
+  /** Ramp the master output level (0..1) over `ms` — the rundown's fade. */
+  fadeMaster(level: number, ms: number): void {
+    this.sender.fadeTo(level, ms);
+  }
+
+  /** Jump the master output level (0..1) with no ramp. */
+  setMaster(level: number): void {
+    this.sender.setMasterLevel(level);
+  }
+
+  /** Current master output level (0..1), including an in-flight fade. */
+  get masterLevel(): number {
+    return this.sender.masterLevel;
+  }
+
+  /** Whether the DDP sender is currently ticking. */
+  get running(): boolean {
+    return this.sender.running;
+  }
+
+  get streamMode(): StreamMode {
+    return this.mode;
+  }
+
+  private streamScene(scene: Scene): StreamStatusDTO {
     this.color = null;
     this.soloId = null;
     this.scene = scene;
@@ -420,6 +471,7 @@ export class StreamService {
     this.paint = null;
     this.soloId = null;
     this.streamingIds.clear();
+    this.onStopped?.();
     // Release each device from realtime back to its preset.
     await this.releaseDevices(ids);
     log.info('stream: stopped, devices released');

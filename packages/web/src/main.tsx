@@ -22,6 +22,7 @@ import { StagePage } from './pages/StagePage.js';
 import { LayoutPage } from './pages/LayoutPage.js';
 import { HardwarePage } from './pages/HardwarePage.js';
 import { StudioPage } from './pages/StudioPage.js';
+import { RundownPage } from './pages/RundownPage.js';
 import { PaintPage } from './pages/PaintPage.js';
 
 const queryClient = new QueryClient({
@@ -39,6 +40,7 @@ const router = createBrowserRouter([
       { path: 'layout', element: <LayoutPage /> },
       { path: 'hardware', element: <HardwarePage /> },
       { path: 'studio', element: <StudioPage /> },
+      { path: 'rundown', element: <RundownPage /> },
       { path: 'paint', element: <PaintPage /> },
       { path: 'stage', element: <StagePage /> },
     ],
