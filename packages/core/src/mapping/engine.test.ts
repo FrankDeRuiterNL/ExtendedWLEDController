@@ -47,6 +47,26 @@ describe('matrixCell — wire index → grid cell', () => {
     const c = { ...base, columnMajor: true, serpentine: true };
     expect(matrixCell(3, c)).toEqual({ col: 1, row: 2 });
   });
+
+  it('serpentine + bottom-left origin: the whole wire path (3×2)', () => {
+    // The default for a new matrix fixture: pixel 0 bottom-left, run right,
+    // hop up a row, run back left.
+    const g = {
+      kind: 'matrix' as const,
+      width: 3,
+      height: 2,
+      serpentine: true,
+      origin: 'bottom-left' as const,
+    };
+    expect([0, 1, 2, 3, 4, 5].map((i) => matrixCell(i, g))).toEqual([
+      { col: 0, row: 1 },
+      { col: 1, row: 1 },
+      { col: 2, row: 1 },
+      { col: 2, row: 0 },
+      { col: 1, row: 0 },
+      { col: 0, row: 0 },
+    ]);
+  });
 });
 
 describe('fixtureLocalPositions', () => {
@@ -60,6 +80,13 @@ describe('fixtureLocalPositions', () => {
 
   it('single-LED strip sits at the centre', () => {
     expect(fixtureLocalPositions({ kind: 'strip', count: 1 })).toEqual([{ x: 0.5, y: 0.5 }]);
+  });
+
+  it('bottom-left matrix: pixel 0 sits at the bottom-left of the unit box (y down)', () => {
+    const pos = fixtureLocalPositions({
+      kind: 'matrix', width: 4, height: 3, serpentine: true, origin: 'bottom-left',
+    });
+    expect(pos[0]).toEqual({ x: 0, y: 1 });
   });
 
   it('serpentine matrix: wire index 4 (start of reversed row) is at the right edge', () => {

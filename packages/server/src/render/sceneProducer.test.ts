@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeMediaLayer, type Installation, type Scene } from '@ewc/core';
+import { makeMediaLayer, makeTextLayer, type Installation, type Scene } from '@ewc/core';
 import { MediaStore } from '../media/mediaStore.js';
 import type { DdpTarget } from '../realtime/ddpSender.js';
 import { sceneFrameProducer } from './sceneProducer.js';
@@ -73,6 +73,76 @@ describe('sceneFrameProducer — media layers', () => {
     expect([...buf.subarray(3, 6)]).toEqual([255, 0, 0]);
     expect([...buf.subarray(6, 9)]).toEqual([0, 255, 0]);
     expect([...buf.subarray(9, 12)]).toEqual([0, 255, 0]);
+  });
+
+  it('maps a text layer’s uploaded raster onto the fixture LEDs on the wire', () => {
+    // The browser uploads the rasterised string as an ordinary image asset;
+    // buildMediaProvider must read it back through layer.text.assetId.
+    const asset = media.createImage(
+      Buffer.from([0, 0, 255, 255, 255, 255, 0, 255]), // left blue, right yellow
+      { width: 2, height: 1, filename: 'text' },
+    );
+
+    const installation: Installation = {
+      canvas: { width: 10, height: 10 },
+      fixtures: [
+        {
+          id: 'f',
+          deviceId: 1,
+          name: 's',
+          startIndex: 0,
+          geometry: { kind: 'strip', count: 4 },
+          transform: { position: { x: 5, y: 5 }, rotationDeg: 0, size: { x: 10, y: 1 } },
+          enabled: true,
+        },
+      ],
+    };
+
+    const scene: Scene = {
+      name: 't',
+      background: [0, 0, 0],
+      layers: [
+        {
+          ...makeTextLayer('tx'),
+          text: {
+            value: 'HI',
+            fontId: 'inter',
+            sizePx: 96,
+            assetId: asset.id,
+            naturalWidth: 2,
+            naturalHeight: 1,
+          },
+        },
+      ],
+    };
+
+    const buf = sceneFrameProducer(scene, installation, media)(target({ ledCount: 4 }), 0);
+    expect([...buf.subarray(0, 6)]).toEqual([0, 0, 255, 0, 0, 255]);
+    expect([...buf.subarray(6, 12)]).toEqual([255, 255, 0, 255, 255, 0]);
+  });
+
+  it('leaves a text layer’s LEDs black until its raster is uploaded', () => {
+    const installation: Installation = {
+      canvas: { width: 10, height: 10 },
+      fixtures: [
+        {
+          id: 'f',
+          deviceId: 1,
+          name: 's',
+          startIndex: 0,
+          geometry: { kind: 'strip', count: 2 },
+          transform: { position: { x: 5, y: 5 }, rotationDeg: 0, size: { x: 10, y: 1 } },
+          enabled: true,
+        },
+      ],
+    };
+    const scene: Scene = {
+      name: 't',
+      background: [0, 0, 0],
+      layers: [makeTextLayer('tx')], // no assetId yet
+    };
+    const buf = sceneFrameProducer(scene, installation, media)(target({ ledCount: 2 }), 0);
+    expect([...buf]).toEqual([0, 0, 0, 0, 0, 0]);
   });
 
   it('leaves LEDs black when the media asset is missing', () => {

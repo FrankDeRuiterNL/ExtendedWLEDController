@@ -173,6 +173,74 @@ export function sampleMediaFrame(frame: MediaFrame, u: number, v: number): RGBA 
 }
 
 /**
+ * A **text layer** draws a string on the canvas. Like a media layer it has no
+ * effect — the browser rasterises the string (real fonts, real kerning) to an
+ * RGBA image, uploads it as a `'image'` asset, and both the preview and the DDP
+ * loop read that asset back through the {@link MediaFrames} provider. `@ewc/core`
+ * never touches a font.
+ *
+ * The render-affecting fields are hashed into {@link renderHash}; when the live
+ * spec's hash differs from the one stored alongside `assetId`, the raster is
+ * stale (an upload is in flight or failed) and the UI shows a pending state.
+ */
+export interface TextLayerSpec {
+  /** The string drawn on the canvas. `\n` splits lines. */
+  value: string;
+  /** Which bundled font — an id from {@link TEXT_FONTS}. */
+  fontId: string;
+  /** Glyph size, in px of the rasterised image (before the ≤ MEDIA_MAX_EDGE downscale). */
+  sizePx: number;
+  bold?: boolean;
+  italic?: boolean;
+  strikethrough?: boolean;
+  /** Glyph colour, each channel 0..255. Absent = white. */
+  color?: RGB;
+  /** Image asset id for the rasterised RGBA. Absent until the first render lands. */
+  assetId?: string;
+  /** Pixel size of the uploaded raster — feeds {@link fitMediaRect} and the aspect lock. */
+  naturalWidth?: number;
+  naturalHeight?: number;
+  /** {@link textRenderHash} of the spec `assetId` was rendered from. */
+  renderHash?: string;
+}
+
+/** A bundled font offered in the text-layer inspector. `stack` is a CSS font-family. */
+export interface TextFont {
+  id: string;
+  label: string;
+  stack: string;
+}
+
+/**
+ * Fonts the text layer offers. Each is bundled into the web app (`@fontsource/*`,
+ * imported in `main.tsx`) so it works offline; the server never needs them.
+ */
+export const TEXT_FONTS: readonly TextFont[] = [
+  { id: 'inter', label: 'Inter (sans)', stack: '"Inter", system-ui, sans-serif' },
+  { id: 'oswald', label: 'Oswald (condensed)', stack: '"Oswald", "Arial Narrow", sans-serif' },
+  { id: 'roboto-slab', label: 'Roboto Slab (serif)', stack: '"Roboto Slab", Georgia, serif' },
+  { id: 'jetbrains-mono', label: 'JetBrains Mono', stack: '"JetBrains Mono", ui-monospace, monospace' },
+];
+
+/** Stable hash of a text spec's render-affecting fields (not `assetId` / size meta). */
+export function textRenderHash(s: TextLayerSpec): string {
+  return JSON.stringify([
+    s.value,
+    s.fontId,
+    s.sizePx,
+    !!s.bold,
+    !!s.italic,
+    !!s.strikethrough,
+    s.color ?? [255, 255, 255],
+  ]);
+}
+
+/** True when `assetId` is missing or was rendered from a different spec. */
+export function textRasterStale(s: TextLayerSpec): boolean {
+  return !s.assetId || s.renderHash !== textRenderHash(s);
+}
+
+/**
  * A layer's rectangle on the canvas, in normalised [0,1] coords (may extend
  * outside for an overhang). The effect renders **scaled to fill this box** — a
  * point outside contributes nothing, so layers on different parts of the canvas
@@ -204,6 +272,8 @@ export interface Layer {
   mask?: LayerMask | null;
   /** Set on a **media layer** — the layer shows this image instead of an effect. */
   media?: MediaLayerSpec | null;
+  /** Set on a **text layer** — the layer shows this rasterised string instead of an effect. */
+  text?: TextLayerSpec | null;
 }
 
 export interface Scene {
@@ -227,7 +297,7 @@ export const EMPTY_SCENE: Scene = {
 export function unknownEffectIds(scene: Scene): string[] {
   const out = new Set<string>();
   for (const l of scene.layers) {
-    if (l.media || !l.effectId) continue; // media layers (and empty ids) don't use an effect
+    if (l.media || l.text || !l.effectId) continue; // media / text layers (and empty ids) don't use an effect
     if (!getEffect(l.effectId)) out.add(l.effectId);
     if (l.mask && !getEffect(l.mask.effectId)) out.add(l.mask.effectId);
   }
@@ -255,8 +325,9 @@ export function sampleScene(
   for (const layer of scene.layers) {
     if (!layer.enabled || layer.opacity <= 0) continue;
 
-    const def = layer.media ? undefined : getEffect(layer.effectId);
-    if (!layer.media && !def) continue; // unknown effect — see unknownEffectIds()
+    const framed = !!(layer.media || layer.text); // pixels come from a MediaFrames provider
+    const def = framed ? undefined : getEffect(layer.effectId);
+    if (!framed && !def) continue; // unknown effect — see unknownEffectIds()
 
     // Map the canvas point into this layer's box; skip if it falls outside.
     const r = layer.rect;
@@ -270,7 +341,7 @@ export function sampleScene(
     }
 
     let src: RGBA;
-    if (layer.media) {
+    if (framed) {
       const frame = mediaFrames?.get(layer.id);
       if (!frame || frame.width <= 0 || frame.height <= 0) continue;
       src = sampleMediaFrame(frame, lx, ly);
@@ -325,6 +396,21 @@ export function makeMediaLayer(id: string): Layer {
     rect: { ...FULL_RECT },
     mask: null,
     media: null,
+  };
+}
+
+/** A fresh text layer with a placeholder string — `assetId` fills in on first render. */
+export function makeTextLayer(id: string): Layer {
+  return {
+    id,
+    effectId: '',
+    params: {},
+    blend: 'normal',
+    opacity: 1,
+    enabled: true,
+    rect: { ...FULL_RECT },
+    mask: null,
+    text: { value: 'Text', fontId: TEXT_FONTS[0]!.id, sizePx: 96, color: [255, 255, 255] },
   };
 }
 

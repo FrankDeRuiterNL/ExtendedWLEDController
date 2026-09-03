@@ -56,3 +56,49 @@ describe('SceneStore — media layer persistence', () => {
     db.close();
   });
 });
+
+const textScene = (): Scene => ({
+  name: 'tx',
+  background: [0, 0, 0],
+  layers: [
+    {
+      id: 't',
+      effectId: '',
+      params: {},
+      blend: 'normal',
+      opacity: 1,
+      enabled: true,
+      rect: { x: 0, y: 0, w: 1, h: 1 },
+      mask: null,
+      text: {
+        value: 'STAGE 3',
+        fontId: 'oswald',
+        sizePx: 120,
+        bold: true,
+        color: [255, 180, 0],
+        assetId: 'txt-asset',
+        naturalWidth: 512,
+        naturalHeight: 128,
+        renderHash: '["STAGE 3","oswald",120,true,false,false,[255,180,0]]',
+      },
+    },
+  ],
+});
+
+describe('SceneStore — text layer persistence', () => {
+  it('round-trips a text layer spec through save + load', () => {
+    const db = openDb(':memory:');
+    const store = new SceneStore(db);
+
+    const created = store.create('tx', textScene());
+    const reloaded = store.get(created.id)!.scene.layers[0]!.text!;
+    expect(reloaded.value).toBe('STAGE 3');
+    expect(reloaded.fontId).toBe('oswald');
+    expect(reloaded.sizePx).toBe(120);
+    expect(reloaded.bold).toBe(true);
+    expect(reloaded.color).toEqual([255, 180, 0]);
+    expect(reloaded.assetId).toBe('txt-asset');
+
+    db.close();
+  });
+});

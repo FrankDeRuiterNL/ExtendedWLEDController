@@ -161,6 +161,23 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    name: 'milestone 9 — rundown',
+    up: (db) => {
+      // One rundown for now (single-user app), row id always 1 — same shape as
+      // `installation`. The whole {@link Rundown} (ordered cue list) lives in
+      // data_json; playback is a live-only concern owned by the RundownEngine.
+      db.exec(`
+        CREATE TABLE rundown (
+          id          INTEGER PRIMARY KEY CHECK (id = 1),
+          data_json   TEXT NOT NULL DEFAULT '{"cues":[]}',
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO rundown (id) VALUES (1);
+      `);
+    },
+  },
 ];
 
 export function migrate(db: BetterSqlite3.Database): { from: number; to: number } {

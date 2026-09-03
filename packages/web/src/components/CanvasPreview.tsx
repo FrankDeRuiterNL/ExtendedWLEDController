@@ -208,15 +208,27 @@ export function CanvasPreview({
   const fixtureCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
 
-  // Still frames for the scene's IMAGE media layers, keyed by layer id.
+  // Still frames for the scene's IMAGE and TEXT layers, keyed by layer id. A text
+  // layer's string is rasterised + uploaded by its inspector, so here it's just
+  // another image asset to fetch.
   const [mediaImages, setMediaImages] = useState<Map<string, MediaFrame>>(() => new Map());
+  const frameAssetOf = (l: (typeof scene.layers)[number]): string | null =>
+    l.media && l.media.kind !== 'video'
+      ? l.media.assetId
+      : l.text && l.text.assetId
+        ? l.text.assetId
+        : null;
   const imageKey = scene.layers
-    .map((l) => (l.media && l.media.kind !== 'video' ? `${l.id}:${l.media.assetId}` : ''))
+    .map((l) => {
+      const a = frameAssetOf(l);
+      return a ? `${l.id}:${a}` : '';
+    })
     .join(',');
   useEffect(() => {
-    const specs = scene.layers.flatMap((l) =>
-      l.media && l.media.kind !== 'video' ? [[l.id, l.media.assetId] as const] : [],
-    );
+    const specs = scene.layers.flatMap((l) => {
+      const a = frameAssetOf(l);
+      return a ? [[l.id, a] as const] : [];
+    });
     if (specs.length === 0) {
       setMediaImages(new Map());
       return;
@@ -512,8 +524,9 @@ export function CanvasPreview({
 
   /** Locked rect w/h ratio for a media layer (native ratio ÷ canvas ratio), else undefined. */
   const mediaAspect = (layerId: string): number | undefined => {
-    const m = scene.layers.find((l) => l.id === layerId)?.media;
-    if (!m) return undefined;
+    const l = scene.layers.find((x) => x.id === layerId);
+    const m = l?.media ?? l?.text ?? null;
+    if (!m || !m.naturalWidth || !m.naturalHeight) return undefined;
     return (m.naturalWidth / m.naturalHeight) / aspect;
   };
 

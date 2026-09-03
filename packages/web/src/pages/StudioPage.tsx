@@ -19,6 +19,8 @@ import {
   Stack,
   Switch,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -26,6 +28,9 @@ import AddIcon from '@mui/icons-material/Add';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import FormatBoldIcon from '@mui/icons-material/FormatBold';
+import FormatItalicIcon from '@mui/icons-material/FormatItalic';
+import StrikethroughSIcon from '@mui/icons-material/StrikethroughS';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import StopIcon from '@mui/icons-material/Stop';
@@ -44,17 +49,23 @@ import {
   listEffects,
   makeLayer,
   makeMediaLayer,
+  makeTextLayer,
   resolveMediaPositionMs,
+  textRasterStale,
+  textRenderHash,
+  TEXT_FONTS,
   type BlendMode,
   type Layer,
   type LayerRect,
   type MediaLayerSpec,
   type MediaPlaybackType,
   type Scene,
+  type TextLayerSpec,
 } from '@ewc/core';
 import { CanvasPreview } from '../components/CanvasPreview.js';
 import { ParamControl, hexToRgb, rgbToHex } from '../components/ParamControl.js';
 import { mediaUrl, useUploadMedia, type UploadedMedia } from '../api/media.js';
+import { rasterizeAndUploadText } from '../api/text.js';
 import {
   useCreateScene,
   useDeleteScene,
@@ -471,6 +482,228 @@ function MediaLayerInspector({
   );
 }
 
+const TEXT_DEFAULT: TextLayerSpec = { value: 'Text', fontId: TEXT_FONTS[0]!.id, sizePx: 96, color: [255, 255, 255] };
+
+function TextLayerInspector({
+  layer,
+  canvas,
+  onPatch,
+}: {
+  layer: Layer;
+  canvas: { width: number; height: number };
+  onPatch: (p: Partial<Layer>) => void;
+}) {
+  const spec = layer.text ?? TEXT_DEFAULT;
+  const [error, setError] = useState<string | null>(null);
+  const [rendering, setRendering] = useState(false);
+  const hash = textRenderHash(spec);
+  const stale = textRasterStale(spec);
+
+  // Rasterise the string (real fonts, in the browser) and upload it as an image
+  // asset whenever a render-affecting field settles. Debounced so a burst of
+  // keystrokes makes one asset, not one per character.
+  useEffect(() => {
+    if (!stale) {
+      setRendering(false);
+      return;
+    }
+    let cancelled = false;
+    setRendering(true);
+    const timer = setTimeout(() => {
+      rasterizeAndUploadText(spec)
+        .then((r) => {
+          if (cancelled) return;
+          setError(null);
+          onPatch({
+            text: {
+              ...spec,
+              assetId: r.assetId,
+              naturalWidth: r.naturalWidth,
+              naturalHeight: r.naturalHeight,
+              renderHash: r.renderHash,
+            },
+            rect: fitMediaRect(r.naturalWidth, r.naturalHeight, canvas),
+          });
+        })
+        .catch((e) => {
+          if (!cancelled) setError((e as Error).message);
+        })
+        .finally(() => {
+          if (!cancelled) setRendering(false);
+        });
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hash]);
+
+  const set = (p: Partial<TextLayerSpec>) => onPatch({ text: { ...spec, ...p } });
+  const styles: string[] = [
+    ...(spec.bold ? ['bold'] : []),
+    ...(spec.italic ? ['italic'] : []),
+    ...(spec.strikethrough ? ['strike'] : []),
+  ];
+  const colorHex = rgbToHex(spec.color ?? [255, 255, 255]);
+
+  return (
+    <Card>
+      <CardContent>
+        <Stack spacing={1.5}>
+          <TextField
+            size="small"
+            label="Layer name"
+            placeholder="Text layer"
+            value={layer.name ?? ''}
+            onChange={(e) => onPatch({ name: e.target.value })}
+            InputLabelProps={{ shrink: true }}
+          />
+          <TextField
+            size="small"
+            label="Text value"
+            placeholder="Type the words to show…"
+            value={spec.value}
+            onChange={(e) => set({ value: e.target.value })}
+            multiline
+            minRows={1}
+            maxRows={4}
+            InputLabelProps={{ shrink: true }}
+          />
+
+          <TextField
+            select
+            size="small"
+            label="Font"
+            value={spec.fontId}
+            onChange={(e) => set({ fontId: e.target.value })}
+          >
+            {TEXT_FONTS.map((f) => (
+              <MenuItem key={f.id} value={f.id} sx={{ fontFamily: f.stack }}>
+                {f.label}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <Stack direction="row" spacing={1.5} alignItems="center">
+            <ToggleButtonGroup
+              size="small"
+              value={styles}
+              onChange={(_, next: string[]) =>
+                set({
+                  bold: next.includes('bold'),
+                  italic: next.includes('italic'),
+                  strikethrough: next.includes('strike'),
+                })
+              }
+            >
+              <ToggleButton value="bold" aria-label="Bold">
+                <FormatBoldIcon fontSize="small" />
+              </ToggleButton>
+              <ToggleButton value="italic" aria-label="Italic">
+                <FormatItalicIcon fontSize="small" />
+              </ToggleButton>
+              <ToggleButton value="strike" aria-label="Strikethrough">
+                <StrikethroughSIcon fontSize="small" />
+              </ToggleButton>
+            </ToggleButtonGroup>
+            <TextField
+              size="small"
+              type="number"
+              label="Size (px)"
+              value={spec.sizePx}
+              onChange={(e) => {
+                const n = Math.round(Number(e.target.value));
+                if (Number.isFinite(n)) set({ sizePx: Math.min(400, Math.max(8, n)) });
+              }}
+              inputProps={{ min: 8, max: 400, step: 4 }}
+              sx={{ width: 108 }}
+            />
+            <Stack alignItems="center" spacing={0.25}>
+              <Typography variant="caption" color="text.secondary">
+                Colour
+              </Typography>
+              <input
+                type="color"
+                value={colorHex}
+                onChange={(e) => set({ color: hexToRgb(e.target.value) })}
+                style={{ width: 40, height: 28, background: 'none', border: 'none', padding: 0 }}
+              />
+            </Stack>
+          </Stack>
+
+          {error ? (
+            <Alert severity="error" onClose={() => setError(null)}>
+              {error}
+            </Alert>
+          ) : (
+            <Typography variant="caption" color="text.secondary">
+              {rendering || stale
+                ? 'Rendering the text…'
+                : 'Fixtures under the box take their colour from the rendered text. The box re-centres to fit the text each time you edit it.'}
+            </Typography>
+          )}
+
+          <Divider>
+            <Typography variant="caption" color="text.secondary">
+              Blend
+            </Typography>
+          </Divider>
+          <TextField
+            select
+            size="small"
+            label="Blend"
+            value={layer.blend}
+            onChange={(e) => onPatch({ blend: e.target.value as BlendMode })}
+          >
+            {BLEND_MODES.map((b) => (
+              <MenuItem key={b.value} value={b.value}>
+                {b.label}
+              </MenuItem>
+            ))}
+          </TextField>
+          <Box>
+            <Stack direction="row" justifyContent="space-between">
+              <Typography variant="body2">Opacity</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {Math.round(layer.opacity * 100)}%
+              </Typography>
+            </Stack>
+            <Box sx={{ px: 0.5 }}>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={layer.opacity}
+                onChange={(e) => onPatch({ opacity: Number(e.target.value) })}
+                style={{ width: '100%' }}
+              />
+            </Box>
+          </Box>
+
+          <Divider>
+            <Typography variant="caption" color="text.secondary">
+              Canvas region
+            </Typography>
+          </Divider>
+          <RegionEditor rect={layer.rect ?? FULL_RECT} onChange={(rect) => onPatch({ rect })} />
+          {spec.naturalWidth && spec.naturalHeight && (
+            <Button
+              size="small"
+              onClick={() =>
+                onPatch({ rect: fitMediaRect(spec.naturalWidth!, spec.naturalHeight!, canvas) })
+              }
+            >
+              Reset box to text aspect
+            </Button>
+          )}
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function StudioPage() {
   const { data: sceneList } = useScenes();
   const { data: installation } = useInstallation();
@@ -597,6 +830,12 @@ export function StudioPage() {
     setSelectedId(l.id);
     setDirty(true);
   };
+  const addTextLayer = () => {
+    const l = makeTextLayer(newLayerId());
+    setScene((s) => ({ ...s, layers: [...s.layers, l] }));
+    setSelectedId(l.id);
+    setDirty(true);
+  };
   const setLayerMedia = (id: string, m: UploadedMedia) => {
     const isVideo = m.kind === 'video';
     patchLayer(id, {
@@ -627,8 +866,10 @@ export function StudioPage() {
   };
 
   const selected = scene.layers.find((l) => l.id === selectedId) ?? null;
-  const selectedIsMedia = !!selected && selected.media !== undefined;
-  const selectedDef = selected && !selectedIsMedia ? getEffect(selected.effectId) : undefined;
+  const selectedIsText = !!selected && selected.text != null;
+  const selectedIsMedia = !!selected && !selectedIsText && selected.media !== undefined;
+  const selectedDef =
+    selected && !selectedIsMedia && !selectedIsText ? getEffect(selected.effectId) : undefined;
 
   const running = stream?.running ?? false;
   const sceneRunning = running && stream?.mode === 'scene';
@@ -934,13 +1175,21 @@ export function StudioPage() {
                   >
                     Media Layer
                   </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      addTextLayer();
+                      setAddAnchor(null);
+                    }}
+                  >
+                    Text Layer
+                  </MenuItem>
                 </Menu>
               </Stack>
 
               {scene.layers.length === 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                   No layers. <b>FX Layer</b> is a plain solid you can change below; <b>Media Layer</b>{' '}
-                  maps an image or video onto the fixtures under it.
+                  maps an image or video onto the fixtures under it; <b>Text Layer</b> draws a string.
                 </Typography>
               )}
 
@@ -950,17 +1199,21 @@ export function StudioPage() {
                   const isSel = l.id === selectedId;
                   const label =
                     l.name?.trim() ||
-                    (l.media !== undefined
-                      ? l.media?.filename || 'Media layer'
-                      : def?.name || l.effectId);
+                    (l.text != null
+                      ? l.text.value.trim() || 'Text layer'
+                      : l.media !== undefined
+                        ? l.media?.filename || 'Media layer'
+                        : def?.name || l.effectId);
                   const mediaTag =
-                    l.media === undefined
-                      ? ''
-                      : l.media === null
-                        ? ' · media'
-                        : l.media.kind === 'video'
-                          ? ' · video'
-                          : ' · image';
+                    l.text != null
+                      ? ' · text'
+                      : l.media === undefined
+                        ? ''
+                        : l.media === null
+                          ? ' · media'
+                          : l.media.kind === 'video'
+                            ? ' · video'
+                            : ' · image';
                   return (
                     <Stack
                       key={l.id}
@@ -1014,6 +1267,15 @@ export function StudioPage() {
               canvas={installation?.canvas ?? { width: 16, height: 9 }}
               onPatch={(p) => patchLayer(selected.id, p)}
               onUploaded={(m) => setLayerMedia(selected.id, m)}
+            />
+          )}
+
+          {selected && selectedIsText && (
+            <TextLayerInspector
+              key={selected.id}
+              layer={selected}
+              canvas={installation?.canvas ?? { width: 16, height: 9 }}
+              onPatch={(p) => patchLayer(selected.id, p)}
             />
           )}
 

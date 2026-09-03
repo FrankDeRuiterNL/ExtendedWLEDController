@@ -30,6 +30,7 @@ import {
   type FixtureShape,
   type FloorplanRef,
   type Installation,
+  type MatrixOrigin,
   type ShapeKind,
   type Vec2,
 } from '@ewc/core';
@@ -49,6 +50,40 @@ const newId = () => `fx-${Date.now().toString(36)}-${idSeq++}`;
 const SHAPE_KINDS: ShapeKind[] = ['line', 'rectangle', 'square', 'triangle', 'diamond', 'circle'];
 type GeomChoice = 'strip' | 'matrix' | ShapeKind | 'custom';
 
+type MatrixGeometry = Extract<FixtureGeometry, { kind: 'matrix' }>;
+
+/** How the LED strip snakes through the grid — `columnMajor` × `serpentine`. */
+type MatrixWiring = 'h-zigzag' | 'h-oneway' | 'v-zigzag' | 'v-oneway';
+const MATRIX_WIRING: {
+  value: MatrixWiring;
+  label: string;
+  columnMajor: boolean;
+  serpentine: boolean;
+}[] = [
+  { value: 'h-zigzag', label: 'Horizontal zigzag', columnMajor: false, serpentine: true },
+  { value: 'h-oneway', label: 'Horizontal, one-way', columnMajor: false, serpentine: false },
+  { value: 'v-zigzag', label: 'Vertical zigzag', columnMajor: true, serpentine: true },
+  { value: 'v-oneway', label: 'Vertical, one-way', columnMajor: true, serpentine: false },
+];
+const wiringOf = (g: MatrixGeometry): MatrixWiring =>
+  g.columnMajor
+    ? g.serpentine
+      ? 'v-zigzag'
+      : 'v-oneway'
+    : g.serpentine
+      ? 'h-zigzag'
+      : 'h-oneway';
+
+const MATRIX_ORIGINS: { value: MatrixOrigin; label: string }[] = [
+  { value: 'bottom-left', label: 'Bottom-left' },
+  { value: 'bottom-right', label: 'Bottom-right' },
+  { value: 'top-left', label: 'Top-left' },
+  { value: 'top-right', label: 'Top-right' },
+];
+
+/** WLED matrices are usually wired pixel 0 at a bottom corner, snaking across rows. */
+const DEFAULT_MATRIX = { serpentine: true, columnMajor: false, origin: 'bottom-left' } as const;
+
 /** Rotate (x,y) by `deg` about the origin. */
 function rot(x: number, y: number, deg: number): Vec2 {
   const r = (deg * Math.PI) / 180;
@@ -60,7 +95,7 @@ function rot(x: number, y: number, deg: number): Vec2 {
 function defaultGeometry(kind: FixtureGeometry['kind'], leds: number): FixtureGeometry {
   if (kind === 'matrix') {
     const w = Math.max(1, Math.round(Math.sqrt(leds)));
-    return { kind: 'matrix', width: w, height: Math.max(1, Math.ceil(leds / w)), serpentine: true, origin: 'top-left' };
+    return { kind: 'matrix', width: w, height: Math.max(1, Math.ceil(leds / w)), ...DEFAULT_MATRIX };
   }
   if (kind === 'points') return { kind: 'points', points: [] };
   return { kind: 'strip', count: leds };
@@ -228,8 +263,17 @@ export function LayoutPage() {
     }
     if (choice === 'matrix') {
       const w = Math.max(1, Math.round(Math.sqrt(count)));
+      // Keep the wiring the fixture already had if it's staying a matrix.
+      const prev = f.geometry.kind === 'matrix' ? f.geometry : null;
       patchFixture(id, {
-        geometry: { kind: 'matrix', width: w, height: Math.max(1, Math.ceil(count / w)), serpentine: true, origin: 'top-left' },
+        geometry: {
+          kind: 'matrix',
+          width: prev?.width ?? w,
+          height: prev?.height ?? Math.max(1, Math.ceil(count / w)),
+          serpentine: prev?.serpentine ?? DEFAULT_MATRIX.serpentine,
+          columnMajor: prev?.columnMajor ?? DEFAULT_MATRIX.columnMajor,
+          origin: prev?.origin ?? DEFAULT_MATRIX.origin,
+        },
       });
       return;
     }
@@ -597,6 +641,20 @@ export function LayoutPage() {
                         strokeWidth={isSel ? 0.06 : 0.03}
                       />
                     </g>
+                    {isSel && f.geometry.kind === 'matrix' && leds.length > 1 && (
+                      <polyline
+                        points={leds
+                          .map((l) => `${l.x * inst.canvas.width},${l.y * inst.canvas.height}`)
+                          .join(' ')}
+                        fill="none"
+                        stroke={md3.primary}
+                        strokeWidth={0.04}
+                        strokeOpacity={0.45}
+                        strokeLinejoin="round"
+                        strokeLinecap="round"
+                        pointerEvents="none"
+                      />
+                    )}
                     {leds.map((l, i) => (
                       <circle
                         key={i}
@@ -765,28 +823,50 @@ export function LayoutPage() {
                     Redraw custom shape
                   </Button>
                 )}
-                {selected.geometry.kind === 'matrix' && (
-                  <Stack direction="row" spacing={1}>
-                    <TextField
-                      type="number" size="small" label="W"
-                      value={selected.geometry.width}
-                      onChange={(e) =>
-                        patchFixture(selected.id, {
-                          geometry: { ...(selected.geometry as Extract<FixtureGeometry, { kind: 'matrix' }>), width: Math.max(1, Number(e.target.value)) },
-                        })
-                      }
-                    />
-                    <TextField
-                      type="number" size="small" label="H"
-                      value={selected.geometry.height}
-                      onChange={(e) =>
-                        patchFixture(selected.id, {
-                          geometry: { ...(selected.geometry as Extract<FixtureGeometry, { kind: 'matrix' }>), height: Math.max(1, Number(e.target.value)) },
-                        })
-                      }
-                    />
-                  </Stack>
-                )}
+                {selected.geometry.kind === 'matrix' && (() => {
+                  const g = selected.geometry;
+                  const patchMatrix = (p: Partial<MatrixGeometry>) =>
+                    patchFixture(selected.id, { geometry: { ...g, ...p } });
+                  return (
+                    <>
+                      <Stack direction="row" spacing={1}>
+                        <TextField
+                          type="number" size="small" label="Columns"
+                          value={g.width}
+                          onChange={(e) => patchMatrix({ width: Math.max(1, Number(e.target.value)) })}
+                        />
+                        <TextField
+                          type="number" size="small" label="Rows"
+                          value={g.height}
+                          onChange={(e) => patchMatrix({ height: Math.max(1, Number(e.target.value)) })}
+                        />
+                      </Stack>
+                      <TextField
+                        select size="small" label="Wiring"
+                        value={wiringOf(g)}
+                        helperText="How the strip snakes through the grid."
+                        onChange={(e) => {
+                          const w = MATRIX_WIRING.find((x) => x.value === e.target.value);
+                          if (w) patchMatrix({ columnMajor: w.columnMajor, serpentine: w.serpentine });
+                        }}
+                      >
+                        {MATRIX_WIRING.map((w) => (
+                          <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>
+                        ))}
+                      </TextField>
+                      <TextField
+                        select size="small" label="First LED (pixel 0)"
+                        value={g.origin}
+                        helperText="Which corner the wire starts from."
+                        onChange={(e) => patchMatrix({ origin: e.target.value as MatrixOrigin })}
+                      >
+                        {MATRIX_ORIGINS.map((o) => (
+                          <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+                        ))}
+                      </TextField>
+                    </>
+                  );
+                })()}
 
                 <Divider />
                 <Box>

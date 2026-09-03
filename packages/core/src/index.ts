@@ -21,6 +21,7 @@ export * from './ddp/legacyUdp.js';
 export * from './dmx/plan.js';
 export * from './mapping/model.js';
 export * from './mapping/engine.js';
+export * from './hardware/power.js';
 
 export * from './render/types.js';
 export * from './render/color.js';
@@ -29,12 +30,14 @@ export * from './render/blend.js';
 export * from './render/registry.js';
 export * from './render/scene.js';
 export * from './render/whiteBalance.js';
+export * from './rundown/model.js';
 
 export * from './api/devices.js';
 export * from './api/realtime.js';
 export * from './api/dmx.js';
 export * from './api/scenes.js';
 export * from './api/pixelScenes.js';
+export * from './api/rundown.js';
 
 /**
  * Single source of truth for the application version. Shown in the UI footer and
@@ -42,7 +45,7 @@ export * from './api/pixelScenes.js';
  * on every milestone completion or otherwise significant change, and keep the
  * five workspace `package.json` versions in step with it.
  */
-export const APP_VERSION = '0.11.2';
+export const APP_VERSION = '0.14.0';
 
 /** @deprecated use {@link APP_VERSION} — kept so older callers keep compiling. */
 export const CORE_VERSION = APP_VERSION;

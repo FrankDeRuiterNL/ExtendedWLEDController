@@ -51,10 +51,16 @@ const floorplan = z.object({
   size: vec2,
 });
 
+const outputHardware = z.object({
+  ledTypeId: z.string().max(40).optional(),
+  ledsPerMeter: z.number().positive().max(1000).optional(),
+});
+
 export const installationSchema = z.object({
   fixtures: z.array(fixture).max(512),
   canvas: z.object({ width: z.number().positive(), height: z.number().positive() }),
   floorplan: floorplan.optional(),
+  outputs: z.record(z.string(), outputHardware).optional(),
 });
 
 export class InstallationStore {

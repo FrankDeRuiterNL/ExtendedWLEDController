@@ -21,6 +21,9 @@ import { PixelSceneStore } from './paint/pixelSceneStore.js';
 import { BakeService } from './paint/bakeService.js';
 import { SceneStore } from './render/sceneStore.js';
 import { StreamService } from './realtime/streamService.js';
+import { RundownStore } from './rundown/store.js';
+import { RundownEngine } from './rundown/engine.js';
+import { rundownRoutes } from './rundown/routes.js';
 import { log } from './logger.js';
 
 async function main(): Promise<void> {
@@ -42,6 +45,8 @@ async function main(): Promise<void> {
   log.info(ffmpegAvailable ? 'ffmpeg found — video media layers enabled' : 'ffmpeg not found — video media layers disabled');
   const scenes = new SceneStore(db);
   const stream = new StreamService(db, config, hub, installation, media);
+  const rundownStore = new RundownStore(db);
+  const rundown = new RundownEngine(rundownStore, scenes, stream);
   const paint = new PaintService(db, config);
   const pixelScenes = new PixelSceneStore(db);
   const bake = new BakeService(db, config);
@@ -61,6 +66,7 @@ async function main(): Promise<void> {
   app.use('/api/dmx', dmxRoutes(dmx));
   app.use('/api/stream', streamRoutes(stream, scenes));
   app.use('/api/scenes', sceneRoutes(scenes));
+  app.use('/api/rundown', rundownRoutes(rundownStore, rundown));
   app.use('/api/media', mediaRoutes(media, { ffmpeg: ffmpegAvailable, tmpDir: mediaTmpDir }));
   app.use(
     '/api/installation',
@@ -95,6 +101,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info(`${signal} received, shutting down`);
+    rundown.shutdown();
     await stream.stop().catch(() => undefined);
     stream.shutdown();
     browserHub.close();
