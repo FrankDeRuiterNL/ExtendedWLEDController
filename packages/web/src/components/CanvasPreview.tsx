@@ -3,12 +3,12 @@ import { Box } from '@mui/material';
 import {
   FULL_RECT,
   mapFixture,
-  mapInstallation,
   resolveMediaPositionMs,
   sampleScene,
   type Installation,
   type LayerRect,
   type MediaFrame,
+  type MediaFrames,
   type Scene,
 } from '@ewc/core';
 import { floorplanUrl } from '../api/stage.js';
@@ -71,6 +71,89 @@ function resizeRect(
   return { x, y, w, h };
 }
 
+const clamp255 = (n: number) => (n < 0 ? 0 : n > 255 ? 255 : n) | 0;
+
+/**
+ * Draw the fixtures onto the crisp overlay: a neutral "housing" line following
+ * each fixture's LED path, then the live per-LED colour on top — a continuous
+ * lit segment for strips, a dot for a single point. Everything is at display
+ * resolution so nothing smears.
+ */
+function drawFixtures(
+  octx: CanvasRenderingContext2D,
+  cw: number,
+  ch: number,
+  dpr: number,
+  installation: Installation,
+  scene: Scene,
+  t: number,
+  mediaFrames: MediaFrames | undefined,
+  deviceGains: Record<number, readonly [number, number, number]> | undefined,
+): void {
+  octx.clearRect(0, 0, cw, ch);
+  octx.lineCap = 'round';
+  octx.lineJoin = 'round';
+
+  const trace = (px: ReadonlyArray<readonly [number, number]>) => {
+    octx.beginPath();
+    octx.moveTo(px[0]![0], px[0]![1]);
+    for (let i = 1; i < px.length; i++) octx.lineTo(px[i]![0], px[i]![1]);
+  };
+
+  for (const f of installation.fixtures) {
+    if (!f.enabled) continue;
+    const pts = mapFixture(f, installation.canvas);
+    if (pts.length === 0) continue;
+
+    const px = pts.map((p) => [p.x * cw, p.y * ch] as const);
+    const g = deviceGains?.[f.deviceId];
+    const colourAt = (i: number): string => {
+      const c = sampleScene(scene, pts[i]!.x, pts[i]!.y, t, mediaFrames);
+      return g
+        ? `rgb(${clamp255(c[0] * g[0])},${clamp255(c[1] * g[1])},${clamp255(c[2] * g[2])})`
+        : `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
+    };
+
+    const single = px.length === 1;
+
+    // Double outline so the fixture reads on ANY canvas colour (its lit colour
+    // otherwise matches the canvas exactly): a dark casing under a light rim.
+    if (single) {
+      octx.beginPath();
+      octx.arc(px[0]![0], px[0]![1], 3 * dpr, 0, Math.PI * 2);
+    } else {
+      trace(px);
+    }
+    octx.strokeStyle = 'rgba(0,0,0,0.55)';
+    octx.lineWidth = 5 * dpr;
+    octx.stroke();
+    octx.strokeStyle = 'rgba(255,255,255,0.28)';
+    octx.lineWidth = 3.2 * dpr;
+    octx.stroke();
+
+    // Lit core — the actual per-LED colour.
+    if (single) {
+      octx.beginPath();
+      octx.arc(px[0]![0], px[0]![1], 2 * dpr, 0, Math.PI * 2);
+      octx.fillStyle = colourAt(0);
+      octx.fill();
+      continue;
+    }
+    octx.lineWidth = 2 * dpr;
+    for (let i = 0; i < px.length - 1; i++) {
+      octx.beginPath();
+      octx.moveTo(px[i]![0], px[i]![1]);
+      octx.lineTo(px[i + 1]![0], px[i + 1]![1]);
+      octx.strokeStyle = colourAt(i);
+      octx.stroke();
+    }
+    octx.beginPath();
+    octx.arc(px[px.length - 1]![0], px[px.length - 1]![1], 1 * dpr, 0, Math.PI * 2);
+    octx.fillStyle = colourAt(px.length - 1);
+    octx.fill();
+  }
+}
+
 /**
  * Renders a {@link Scene} with the **same `sampleScene`** the DDP loop uses. When
  * `editable`, overlays a draggable / resizable box per layer so effects can be
@@ -91,6 +174,9 @@ export function CanvasPreview({
   deviceGains,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /** Crisp, display-resolution overlay for the fixtures (the pixel canvas below
+   *  is low-res and would smear thin lines when the browser upscales it). */
+  const fixtureCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
 
   // Still frames for the scene's IMAGE media layers, keyed by layer id.
@@ -195,6 +281,31 @@ export function CanvasPreview({
     if (!ctx) return;
     const img = ctx.createImageData(w, h);
 
+    // Fixture overlay: sized to its own on-screen box × devicePixelRatio so the
+    // thin lines stay crisp regardless of how big the preview is rendered.
+    const fixCanvas = fixtureCanvasRef.current;
+    const fixCtx = fixCanvas?.getContext('2d') ?? null;
+    let fixW = 0;
+    let fixH = 0;
+    const sizeFixture = () => {
+      if (!fixCanvas) return;
+      const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+      const rect = fixCanvas.getBoundingClientRect();
+      fixW = Math.max(1, Math.round(rect.width * dpr));
+      fixH = Math.max(1, Math.round(rect.height * dpr));
+      if (fixCanvas.width !== fixW) fixCanvas.width = fixW;
+      if (fixCanvas.height !== fixH) fixCanvas.height = fixH;
+      return dpr;
+    };
+    let dpr = sizeFixture() ?? 1;
+    const ro =
+      fixCanvas && 'ResizeObserver' in window
+        ? new ResizeObserver(() => {
+            dpr = sizeFixture() ?? dpr;
+          })
+        : null;
+    if (ro && fixCanvas) ro.observe(fixCanvas);
+
     let raf = 0;
     let start = performance.now();
     let stoppedAt = 0;
@@ -285,28 +396,23 @@ export function CanvasPreview({
       }
       ctx.putImageData(img, 0, 0);
 
-      if (s.showFixtures && s.installation) {
-        // Fixture dots show the actual sampled colour, with each device's white
-        // balance applied — the one place the preview can reflect a per-device
-        // correction (the shared canvas can't carry three white points).
-        for (const led of mapInstallation(s.installation)) {
-          const c = sampleScene(s.scene, led.x, led.y, t, mediaFrames);
-          const g = s.deviceGains?.[led.deviceId];
-          const r = g ? c[0] * g[0] : c[0];
-          const gr = g ? c[1] * g[1] : c[1];
-          const b = g ? c[2] * g[2] : c[2];
-          const px = led.x * w;
-          const py = led.y * h;
-          ctx.fillStyle = 'rgba(0,0,0,0.55)';
-          ctx.fillRect(px - 1.6, py - 1.6, 3.2, 3.2);
-          ctx.fillStyle = `rgb(${r | 0},${gr | 0},${b | 0})`;
-          ctx.fillRect(px - 1, py - 1, 2, 2);
+      // Fixtures: crisp, on their own display-resolution overlay. Each LED's
+      // colour is the actual `sampleScene` value with the device's white balance
+      // applied — the one place the preview can reflect a per-device correction.
+      if (fixCtx) {
+        if (s.showFixtures && s.installation && s.installation.fixtures.length > 0) {
+          drawFixtures(fixCtx, fixW, fixH, dpr, s.installation, s.scene, t, mediaFrames, s.deviceGains);
+        } else {
+          fixCtx.clearRect(0, 0, fixW, fixH);
         }
       }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro?.disconnect();
+    };
   }, [aspect, resolution]);
 
   const onPointerDown = (
@@ -389,6 +495,18 @@ export function CanvasPreview({
           />
         );
       })()}
+
+      <Box
+        component="canvas"
+        ref={fixtureCanvasRef}
+        sx={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+        }}
+      />
 
       {showFixtures && installation && installation.fixtures.length > 0 && (
         <Box sx={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
