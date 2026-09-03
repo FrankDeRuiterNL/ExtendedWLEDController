@@ -229,3 +229,39 @@ export function postState(e: WledEndpoint, patch: WledState): Promise<WledState 
 export function postCfg(e: WledEndpoint, patch: Record<string, unknown>): Promise<{ success?: boolean }> {
   return postJson(e, '/json/cfg', patch);
 }
+
+/**
+ * Upload a file to the device filesystem via `POST /upload`.
+ *
+ * VERIFIED against WLED 16.0.1 (2026-09-03): the multipart field name **must be
+ * `file`**, and the filename **must not have a leading `/`** — either mistake
+ * makes WLED return `200 "File Uploaded!"` while writing nothing. The `/edit`
+ * delete route 404s on that build, so callers must reuse a deterministic
+ * filename (overwrite in place) rather than accumulate files.
+ */
+export async function uploadFile(
+  e: WledEndpoint,
+  filename: string,
+  bytes: Uint8Array,
+  contentType = 'application/octet-stream',
+): Promise<void> {
+  const name = filename.replace(/^\/+/, '');
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type: contentType }), name);
+
+  const url = `${baseUrl(e)}/upload`;
+  let res: Response;
+  try {
+    res = await fetch(url, { method: 'POST', body: form, signal: AbortSignal.timeout(e.timeoutMs) });
+  } catch (err) {
+    throw new WledHttpError(`POST /upload failed: ${(err as Error).message}`, err);
+  }
+  if (!res.ok) throw new WledHttpError(`POST /upload → HTTP ${res.status}`, undefined, res.status);
+}
+
+/** `GET /edit?list=/` — the device filesystem listing. */
+export async function listFiles(
+  e: WledEndpoint,
+): Promise<Array<{ name: string; type: string; size: number }>> {
+  return getJson(e, '/edit?list=/');
+}

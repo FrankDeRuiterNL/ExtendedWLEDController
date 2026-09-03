@@ -8,7 +8,7 @@ Single Docker container, Node 22 + TypeScript throughout. Single user, no auth
 
 ---
 
-## Status — milestone 5 of 7
+## Status — milestone 6 of 7
 
 | # | Milestone | State |
 |---|---|---|
@@ -16,8 +16,8 @@ Single Docker container, Node 22 + TypeScript throughout. Single user, no auth
 | 2 | State proxy (per-device WebSocket, live push) | ✅ |
 | 3 | Managed DMX patch + mapping + DDP transport | ✅ |
 | 4 | Render engine + effects (layers, scenes, preview) | ✅ |
-| **5** | **Pixel painter (`seg.i`)** | **✅ this build** |
-| 6 | Bake service (GIF / custom palettes) | — |
+| 5 | Pixel painter (live DDP stream) + Pixel Scenes | ✅ |
+| **6** | **Bake service (single-frame GIF → preset)** | **✅ this build** |
 | 7 | Polish (health, fps, DNRGB fallback, per-device white balance, floorplan overlay, fixture shapes) | — |
 
 ### What milestone 1 does
@@ -138,8 +138,27 @@ Single Docker container, Node 22 + TypeScript throughout. Single user, no auth
 - 1-D strips only. A matrix is treated as a 1-D strip in wire order; a real 2-D
   grid needs the pixel mapping verified on a panel first, so the page flags it.
 - The `seg.i` static-paint helpers (`@ewc/core` `wled/paint.ts`, `POST
-  /api/devices/:id/paint`) are built and unit-tested but not wired to the page —
-  the painter streams over DDP instead. Kept for the milestone-6 bake path.
+  /api/devices/:id/paint`) are built and unit-tested but **unused** — the painter
+  streams over DDP instead, and static bake (milestone 6) is palette / GIF.
+
+### What milestone 6 adds
+
+- **Bake service** — write a painted canvas (or a saved Pixel Scene) to the device
+  as a **single-frame GIF**, uploaded to the device filesystem and played with the
+  **Image** effect. No stream, no server — it runs on the device. Optionally
+  `psave` it as a **preset** so it survives a reboot. **Bake to device** card on
+  the Paint page + a **Bake** button per Pixel Scene.
+- Free-space gated (`info.fs`), and filenames are **deterministic / overwritten in
+  place** — real WLED 16.0.1's `/edit` delete route 404s, so unique names would
+  fill the ~1 MB filesystem with no way to clean up.
+- Verified `/upload` contract (WLED 16.0.1): multipart field name **`file`**,
+  filename **without** a leading `/` — either wrong and WLED returns
+  `200 File Uploaded!` while writing nothing. Recorded under "Verified protocol
+  facts" in the build spec.
+- **Custom-palette bake is not shipped.** Upload + `cpalcount` work, but the
+  palette was not selectable via `seg.pal` on Frank's QuinLED build (see the spec
+  note). The single-frame GIF is the reliable static bake; animated-GIF-from-scene
+  is a milestone-6 follow-up.
 
 ### Test against real hardware
 
@@ -165,6 +184,12 @@ Single Docker container, Node 22 + TypeScript throughout. Single user, no auth
    returns to its effect. Save the canvas as a **Pixel Scene**, clear it, reload
    it, confirm the strip shows it again. If a Studio scene is streaming when you
    start painting, you should get a confirm prompt first.
+7. **Bake** (Paint page → "Bake to device"): paint a canvas, click **Bake canvas**.
+   The strip should switch to the Image effect showing your pixels (scaled across
+   the strip) with no stream running. Add a preset slot (e.g. `250`), bake again,
+   then load that preset from the WLED app — it should still show the image after
+   a reboot. Tell me if your device's own WLED UI can select an uploaded **custom
+   palette** (Config → Palettes) — that decides whether palette bake is viable.
 
 ---
 
@@ -243,6 +268,7 @@ WLED 16.0.0 (ESP32) and 16.0.1 (QuinLED Dig-Quad), including a genuine truncated
 | POST | `/api/stream/solid` · `/api/stream/pattern` · `/api/stream/stop` | start solid / alignment-pattern stream / stop |
 | POST | `/api/stream/scene` | stream a scene (`{sceneId}` or inline `{scene}`) |
 | POST | `/api/stream/paint` | live pixel-painter stream to one device (`{deviceId, segStart?, brightness, pixels[]}`) |
+| POST | `/api/devices/:id/bake` | bake a canvas / Pixel Scene to a GIF preset (`{sceneId?\|pixels[], segId?, preset?, name?}`) |
 | GET/POST | `/api/pixel-scenes` · `/api/pixel-scenes/:id` | saved pixel-painter canvases |
 | PUT | `/api/stream/:id/pixel-offset` | per-device LED offset compensation |
 | GET/PUT | `/api/installation` | the fixture / canvas model |

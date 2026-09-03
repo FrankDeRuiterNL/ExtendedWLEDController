@@ -27,6 +27,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import type { PixelScene, WledSegment, WledState } from '@ewc/core';
 import { useDevice, useDevices } from '../api/devices.js';
 import { useStartPaintStream, useStopStream, useStreamStatus } from '../api/stage.js';
+import { useBake } from '../api/paint.js';
 import {
   fetchPixelScene,
   useCreatePixelScene,
@@ -57,6 +58,7 @@ export function PaintPage() {
   const createScene = useCreatePixelScene();
   const updateScene = useUpdatePixelScene();
   const deleteScene = useDeletePixelScene();
+  const bake = useBake(effectiveId ?? 0);
 
   const state: WledState = device?.state ?? {};
   const segments = useMemo(
@@ -77,6 +79,7 @@ export function PaintPage() {
   const [brightness, setBrightness] = useState(160);
 
   const [sceneName, setSceneName] = useState('');
+  const [bakePreset, setBakePreset] = useState('');
   const [loadedSceneId, setLoadedSceneId] = useState<number | null>(null);
   const [confirmLoad, setConfirmLoad] = useState<{ id: number; name: string } | null>(null);
   const [confirmScene, setConfirmScene] = useState(false);
@@ -242,6 +245,25 @@ export function PaintPage() {
   const requestLoad = (id: number, name: string) => {
     if (streamingThisDevice || litCount > 0) setConfirmLoad({ id, name });
     else void doLoad(id);
+  };
+
+  // --- bake -----------------------------------------------------------
+  const presetSlot = () => {
+    const n = Number(bakePreset);
+    return Number.isInteger(n) && n >= 1 && n <= 250 ? n : undefined;
+  };
+  const bakeCanvas = () => {
+    if (!effectiveId || litCount === 0) return;
+    bake.mutate({
+      segId: activeSegId,
+      preset: presetSlot(),
+      name: sceneName.trim() ? sceneName.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20) : 'canvas',
+      pixels: cells.map((c) => (c ? bare(c) : null)),
+    });
+  };
+  const bakeScene = (id: number) => {
+    if (!effectiveId) return;
+    bake.mutate({ segId: activeSegId, preset: presetSlot(), sceneId: id });
   };
 
   return (
@@ -424,6 +446,51 @@ export function PaintPage() {
         <Card>
           <CardContent>
             <Typography variant="h5" gutterBottom>
+              Bake to device
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Write the canvas to the device as a one-frame GIF and play it with the Image effect —
+              runs on the device with no stream. Add a preset slot to also save it as a preset that
+              survives a reboot. The GIF filename is reused (overwritten) per bake.
+            </Typography>
+            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap alignItems="center">
+              <TextField
+                size="small"
+                label="Preset slot (optional)"
+                type="number"
+                value={bakePreset}
+                onChange={(e) => setBakePreset(e.target.value)}
+                slotProps={{ htmlInput: { min: 1, max: 250 } }}
+                sx={{ width: 180 }}
+              />
+              <Button
+                variant="contained"
+                onClick={bakeCanvas}
+                disabled={bake.isPending || litCount === 0}
+              >
+                Bake canvas
+              </Button>
+            </Stack>
+            {bake.isError && (
+              <Alert severity="error" sx={{ mt: 2 }}>
+                {(bake.error as Error).message}
+              </Alert>
+            )}
+            {bake.isSuccess && !bake.isPending && (
+              <Alert severity="success" sx={{ mt: 2 }}>
+                Baked <code>{bake.data.filename}</code> ({bake.data.bytes} B)
+                {bake.data.preset != null ? `, saved as preset ${bake.data.preset}` : ''}
+                {bake.data.freeKbAfter != null ? ` · ${bake.data.freeKbAfter} KB free` : ''}.
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {segLen > 0 && (
+        <Card>
+          <CardContent>
+            <Typography variant="h5" gutterBottom>
               Pixel Scenes
             </Typography>
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap alignItems="center">
@@ -488,6 +555,14 @@ export function PaintPage() {
                     </Box>
                     <Button size="small" variant="outlined" onClick={() => requestLoad(s.id, s.name)}>
                       Load
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => bakeScene(s.id)}
+                      disabled={bake.isPending}
+                    >
+                      Bake
                     </Button>
                     <IconButton
                       size="small"

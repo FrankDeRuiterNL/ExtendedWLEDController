@@ -133,6 +133,8 @@ export interface WledState {
   ps?: WledNumberOrExpr;
   /** Save current state to this preset slot, 1–250. */
   psave?: number;
+  /** With `psave`: the preset name. */
+  n?: string;
   /** Delete this preset slot. */
   pdel?: number;
   /** With `psave`: also store segment bounds. */

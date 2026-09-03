@@ -31,3 +31,33 @@ export function usePaintRelease(deviceId: number) {
       api.post<{ ok: true }>(`/devices/${deviceId}/paint/release`, segId == null ? {} : { segId }),
   });
 }
+
+export interface BakeRequest {
+  segId?: number;
+  /** 1..250 — also save as a preset that survives reboot. */
+  preset?: number;
+  name?: string;
+  sceneId?: number;
+  /** Segment-relative; `RRGGBB` hex or null. Used when no `sceneId`. */
+  pixels?: Array<string | null>;
+}
+
+export interface BakeResult {
+  ok: true;
+  filename: string;
+  bytes: number;
+  freeKbBefore: number | null;
+  freeKbAfter: number | null;
+  preset: number | null;
+  imageEffect: number | null;
+}
+
+/**
+ * Bake a static pixel image to the device as a one-frame GIF (`seg.n` + the
+ * Image effect), optionally `psave`d as a reboot-proof preset.
+ */
+export function useBake(deviceId: number) {
+  return useMutation({
+    mutationFn: (body: BakeRequest) => api.post<BakeResult>(`/devices/${deviceId}/bake`, body),
+  });
+}

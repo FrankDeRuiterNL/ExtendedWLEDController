@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { z } from 'zod';
 import { PaintError, type PaintService } from './service.js';
 import { pixelSceneSchema, type PixelSceneStore } from './pixelSceneStore.js';
+import { BakeError, type BakeService } from './bakeService.js';
 
 const color = z.union([
   z.string().regex(/^#?[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/, 'expected RRGGBB[WW] hex'),
@@ -47,6 +48,48 @@ export function paintRoutes(service: PaintService): Router {
     try {
       const { segId } = releaseBody.parse(req.body ?? {});
       res.json(await service.release(idParam(req), segId));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  return r;
+}
+
+const bakeBody = z
+  .object({
+    segId: z.number().int().min(0).max(63).optional(),
+    preset: z.number().int().min(1).max(250).optional(),
+    name: z.string().min(1).max(24).optional(),
+    sceneId: z.number().int().positive().optional(),
+    pixels: z
+      .array(z.string().regex(/^[0-9a-fA-F]{6}$/).nullable())
+      .max(4096)
+      .optional(),
+  })
+  .refine((v) => v.sceneId != null || (v.pixels?.length ?? 0) > 0, {
+    message: 'sceneId or pixels[] required',
+  });
+
+export function bakeRoutes(service: BakeService): Router {
+  const r = Router();
+
+  r.post('/:id/bake', async (req, res, next) => {
+    try {
+      const body = bakeBody.parse(req.body);
+      const id = idParam(req);
+      const { pixels, name } =
+        body.sceneId != null
+          ? service.pixelsForScene(body.sceneId)
+          : { pixels: body.pixels!.map((p) => (p ? p.toUpperCase() : null)), name: 'canvas' };
+      res.json(
+        await service.bake(id, {
+          pixels,
+          name: body.name ?? name,
+          segId: body.segId,
+          preset: body.preset,
+        }),
+      );
     } catch (err) {
       next(err);
     }
@@ -110,7 +153,7 @@ export function pixelSceneRoutes(store: PixelSceneStore): Router {
 }
 
 export function paintErrorHandler(err: unknown, _req: Request, res: Response, next: NextFunction): void {
-  if (err instanceof PaintError) {
+  if (err instanceof PaintError || err instanceof BakeError) {
     res.status(err.httpStatus).json({ error: { code: err.code, message: err.message } });
     return;
   }

@@ -36,6 +36,31 @@ about WLED, these win. Do not "correct" them.
   backend, for other reasons — see Architecture.)
 - **WLED has no TLS.** All device traffic is plain HTTP and `ws://`.
 
+### `/upload` and `/edit` — verified against Frank's QuinLED WLED 16.0.1 (2026-09-03)
+
+- **`POST /upload`** is `multipart/form-data`. The file part's field name **must be
+  `file`** (a part named `data` returns `200 File Uploaded!` and writes **nothing** —
+  silent no-op). The target filename comes from the part's `filename` attribute and
+  **must NOT have a leading `/`** — with a leading slash it also returns
+  `200 File Uploaded!` and writes nothing. Success body is the literal text
+  `File Uploaded!`. Files land at filesystem root.
+- **`GET /edit?list=/`** returns the FS listing as
+  `[{"name","type":"file","size"}, …]`. On this build the **`/edit` write/delete
+  routes return 404** — you cannot delete a file over the API. Design bake around
+  **deterministic overwrite-in-place filenames**, not accumulating unique names on a
+  ~1 MB filesystem.
+- **Custom palettes**: file format is an **object** `{"palette":[pos,r,g,b, …]}` —
+  flat integer quads (pos 0–255), array length a multiple of 4, ≥ 2 groups. Upload
+  as `palette0.json` … `palette9.json` (no slash). `info.cpalcount` increments
+  **immediately, no reboot**, and survives reboot. BUT on Frank's build the custom
+  palette was **not selectable via `seg.pal`** — indices 72/73/74/245/246/250/255
+  all clamped back to 0 while a built-in index (35) selected fine. Whether his
+  device's own WLED web UI can select an uploaded custom palette is an open question
+  for him. Treat custom-palette bake as unverified on his hardware; the GIF path is
+  the reliable static/animated bake.
+- `{"rmcpal":true}` removes the **currently-selected** custom palette only — it is a
+  no-op if no custom palette is active on the main segment.
+
 ### Key state fields
 
 | Field | Meaning |
@@ -230,9 +255,13 @@ Implement DNRGB as a per-device fallback toggle. Do not make it the default.
   4. `psave` it as a preset so it survives reboot.
   Works for both 1D and 2D segments; mismatched sizes are scaled nearest-neighbour.
 - **Static bake = custom palette, or a one-frame GIF.** Custom palettes live at
-  `/palette0.json` … `/palette9.json` on the device filesystem, uploaded the same way,
+  `palette0.json` … `palette9.json` on the device filesystem, uploaded the same way,
   removed with `{"rmcpal":true}`, and selectable as normal palette ids. Use palettes for
   gradients and colour schemes; use a single-frame GIF for arbitrary pixel art.
+  **NOTE (2026-09-03):** custom-palette upload + `cpalcount` verified on Frank's
+  hardware, but the palette was **not selectable via `seg.pal`** there — see the
+  `/upload` and `/edit` block under "Verified protocol facts". The **single-frame
+  GIF is the reliable static bake** until that's resolved.
 - Check `info.fs.t` and `info.fs.u` (kilobytes) before uploading. The GIF decoder is
   memory-hungry and fails outright on large files.
 - **Baked animations run on each device's own clock and will drift across devices.**

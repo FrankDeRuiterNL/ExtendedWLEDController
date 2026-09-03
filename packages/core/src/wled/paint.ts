@@ -2,8 +2,9 @@
  * Direct per-pixel painting via a segment's `i` (individual LEDs) field.
  *
  * NOTE: the **Paint page streams over DDP**, not `seg.i` — these helpers are
- * built and unit-tested but currently unused by the UI. Kept for the milestone-6
- * bake path (writing a static image to the device before `psave`).
+ * built and unit-tested but currently **unused**. (Static bake is palette / GIF;
+ * `seg.i` has no role there.) Kept as tested code in case a live-paint-to-`seg.i`
+ * mode is wanted later.
  *
  * `seg.i` is a **live tool only** (build spec, "Baking"):
  * - never persisted — lost on power-off, not stored in presets;

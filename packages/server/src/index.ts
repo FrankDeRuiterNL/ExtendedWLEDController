@@ -11,9 +11,10 @@ import { InstallationStore } from './installation/store.js';
 import { BrowserHub } from './realtime/browserHub.js';
 import { RealtimeHub } from './realtime/hub.js';
 import { dmxRoutes, installationRoutes, sceneRoutes, streamRoutes } from './realtime/routes.js';
-import { paintErrorHandler, paintRoutes, pixelSceneRoutes } from './paint/routes.js';
+import { bakeRoutes, paintErrorHandler, paintRoutes, pixelSceneRoutes } from './paint/routes.js';
 import { PaintService } from './paint/service.js';
 import { PixelSceneStore } from './paint/pixelSceneStore.js';
+import { BakeService } from './paint/bakeService.js';
 import { SceneStore } from './render/sceneStore.js';
 import { StreamService } from './realtime/streamService.js';
 import { log } from './logger.js';
@@ -30,6 +31,7 @@ async function main(): Promise<void> {
   const stream = new StreamService(db, config, hub, installation);
   const paint = new PaintService(db, config);
   const pixelScenes = new PixelSceneStore(db);
+  const bake = new BakeService(db, config);
 
   const app = express();
   app.disable('x-powered-by');
@@ -40,6 +42,7 @@ async function main(): Promise<void> {
   });
 
   app.use('/api/devices', paintRoutes(paint));
+  app.use('/api/devices', bakeRoutes(bake));
   app.use('/api/pixel-scenes', pixelSceneRoutes(pixelScenes));
   app.use('/api/devices', deviceRoutes(service));
   app.use('/api/dmx', dmxRoutes(dmx));
