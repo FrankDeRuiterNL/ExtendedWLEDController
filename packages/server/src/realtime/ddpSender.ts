@@ -32,6 +32,12 @@ export interface DdpTarget {
    * Used to spare slower controllers (ESP8266) that can't ingest 40 fps.
    */
   maxFps: number | null;
+  /**
+   * Per-channel RGB gain (each 0..1) applied to every outgoing pixel — the
+   * per-device white-balance correction. `null` = pass colours through.
+   * Computed once (from the device's Kelvin setting), never per frame.
+   */
+  gain: readonly [number, number, number] | null;
 }
 
 export interface DdpDeviceStats {
@@ -202,6 +208,20 @@ export class DdpSender {
           continue;
         }
         if (data.length === 0) continue;
+
+        // Per-device white balance: scale the RGB channels in place (the W
+        // channel of an rgbw buffer is left alone — white balance has no
+        // business touching it). `data` is a fresh buffer from the producer
+        // every tick, so mutating it here is safe.
+        if (target.gain) {
+          const bpl = target.format === 'rgbw' ? 4 : 3;
+          const [gr, gg, gb] = target.gain;
+          for (let o = 0; o + 2 < data.length; o += bpl) {
+            data[o] = Math.round(data[o]! * gr);
+            data[o + 1] = Math.round(data[o + 1]! * gg);
+            data[o + 2] = Math.round(data[o + 2]! * gb);
+          }
+        }
 
         // Transport is decided upstream (see `StreamService.targetFor`), which
         // also forces `format: 'rgb'` for DNRGB — so `data` is already the right

@@ -81,6 +81,8 @@ export interface StreamStatusDTO {
     transport: RealtimeTransport;
     /** Per-device fps cap, or null when uncapped. */
     maxFps: number | null;
+    /** Kelvin white-balance correction, or null when off. */
+    whiteBalance: { enabled: boolean; kelvin: number } | null;
   }>;
 }
 
@@ -132,6 +134,7 @@ export function useSetStreamConfig() {
       deviceId: number;
       transport?: RealtimeTransport;
       maxFps?: number | null;
+      whiteBalance?: { enabled: boolean; kelvin: number } | null;
     }) => api.put<StreamStatusDTO>(`/stream/${deviceId}/config`, body),
     onSuccess: (d) => qc.setQueryData(streamKey, d),
   });

@@ -153,15 +153,26 @@ export function streamRoutes(stream: StreamService, scenes: SceneStore): Router 
     }
   });
 
-  // Per-device realtime output: transport (DDP vs legacy DNRGB UDP) + fps cap.
+  // Per-device realtime output: transport (DDP vs legacy DNRGB UDP), fps cap,
+  // Kelvin white-balance correction.
   r.put('/:id/config', (req, res, next) => {
     try {
       const body = z
         .object({
           transport: z.enum(['ddp', 'dnrgb']).optional(),
           maxFps: z.number().int().min(1).max(MAX_DEVICE_FPS).nullable().optional(),
+          whiteBalance: z
+            .object({
+              enabled: z.boolean(),
+              kelvin: z.number().int().min(1500).max(15000),
+            })
+            .nullable()
+            .optional(),
         })
-        .refine((v) => v.transport !== undefined || v.maxFps !== undefined, 'empty config')
+        .refine(
+          (v) => v.transport !== undefined || v.maxFps !== undefined || v.whiteBalance !== undefined,
+          'empty config',
+        )
         .parse(req.body);
       stream.setStreamConfig(deviceId(req), body);
       res.json(stream.status());

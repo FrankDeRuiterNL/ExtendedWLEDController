@@ -1,6 +1,10 @@
 import {
   DDP_PORT,
+  WHITE_BALANCE_MAX_K,
+  WHITE_BALANCE_MIN_K,
   decodeCapabilities,
+  isUnitGain,
+  kelvinToRgbGain,
   unknownEffectIds,
   type PixelFormat,
   type Scene,
@@ -26,11 +30,20 @@ import type { RealtimeHub } from './hub.js';
 
 export type StreamMode = 'idle' | 'solid' | 'pattern' | 'scene' | 'paint';
 
-/** Per-device realtime output overrides (defaults: DDP, uncapped). */
+/** Per-device realtime output overrides (defaults: DDP, uncapped, no correction). */
 export interface DeviceStreamConfig {
   transport?: RealtimeTransport;
   /** fps cap; absent/null = full rate. */
   maxFps?: number | null;
+  /** Kelvin white-point correction for RGB-only strips; absent = off. */
+  whiteBalance?: { enabled: boolean; kelvin: number };
+}
+
+/** A partial update to a device's stream config — `null` clears a field. */
+export interface DeviceStreamConfigPatch {
+  transport?: RealtimeTransport;
+  maxFps?: number | null;
+  whiteBalance?: { enabled: boolean; kelvin: number } | null;
 }
 
 /** Live pixel-painter stream: a static image DDP'd to one device. */
@@ -66,6 +79,8 @@ export interface StreamStatusDTO {
       transport: RealtimeTransport;
       /** fps cap for this device, or null when uncapped. */
       maxFps: number | null;
+      /** Kelvin white-point correction, or null when off. */
+      whiteBalance: { enabled: boolean; kelvin: number } | null;
     }
   >;
 }
@@ -153,7 +168,7 @@ export class StreamService {
    * DNRGB UDP fallback) and/or an fps cap. Defaults (DDP, uncapped) are stored
    * as an *absent* entry so the settings blob stays small. Applies live.
    */
-  setStreamConfig(deviceId: number, patch: DeviceStreamConfig): void {
+  setStreamConfig(deviceId: number, patch: DeviceStreamConfigPatch): void {
     const all = this.streamConfigs();
     const next: DeviceStreamConfig = { ...all[String(deviceId)] };
 
@@ -165,6 +180,15 @@ export class StreamService {
       const n = patch.maxFps;
       if (n === null || !Number.isFinite(n) || n <= 0 || n >= MAX_DEVICE_FPS) delete next.maxFps;
       else next.maxFps = Math.round(n);
+    }
+    if (patch.whiteBalance !== undefined) {
+      const wb = patch.whiteBalance;
+      if (!wb || !wb.enabled) delete next.whiteBalance;
+      else
+        next.whiteBalance = {
+          enabled: true,
+          kelvin: Math.round(clampKelvin(wb.kelvin)),
+        };
     }
 
     if (Object.keys(next).length === 0) delete all[String(deviceId)];
@@ -200,6 +224,7 @@ export class StreamService {
       pixelOffset: this.pixelOffsets()[String(row.id)] ?? 0,
       transport,
       maxFps: typeof cfg.maxFps === 'number' && cfg.maxFps > 0 ? cfg.maxFps : null,
+      gain: whiteBalanceGain(cfg.whiteBalance),
     };
   }
 
@@ -447,6 +472,10 @@ export class StreamService {
             pixelOffset: offsets[String(row.id)] ?? 0,
             transport: cfg.transport === 'dnrgb' ? ('dnrgb' as const) : ('ddp' as const),
             maxFps: typeof cfg.maxFps === 'number' && cfg.maxFps > 0 ? cfg.maxFps : null,
+            whiteBalance:
+              cfg.whiteBalance && cfg.whiteBalance.enabled
+                ? { enabled: true, kelvin: cfg.whiteBalance.kelvin }
+                : null,
           };
         }),
     };
@@ -455,6 +484,20 @@ export class StreamService {
   shutdown(): void {
     this.sender.close();
   }
+}
+
+function clampKelvin(k: number): number {
+  if (!Number.isFinite(k)) return WHITE_BALANCE_MAX_K;
+  return Math.min(WHITE_BALANCE_MAX_K, Math.max(WHITE_BALANCE_MIN_K, k));
+}
+
+/** RGB gain for a device's white-balance config, or null when it's a no-op. */
+function whiteBalanceGain(
+  wb: DeviceStreamConfig['whiteBalance'],
+): readonly [number, number, number] | null {
+  if (!wb || !wb.enabled) return null;
+  const g = kelvinToRgbGain(clampKelvin(wb.kelvin));
+  return isUnitGain(g) ? null : g;
 }
 
 function safeParse<T>(raw: string | null): T | null {

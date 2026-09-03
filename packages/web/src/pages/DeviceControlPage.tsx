@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -26,8 +26,12 @@ import {
   brightnessPatch,
   cctIsKelvin,
   decodeCapabilities,
+  kelvinToRgbGain,
   CCT_KELVIN_MAX,
   CCT_KELVIN_MIN,
+  WHITE_BALANCE_MAX_K,
+  WHITE_BALANCE_MIN_K,
+  WHITE_BALANCE_NEUTRAL_K,
   type LinkType,
   type WledSegment,
   type WledState,
@@ -40,6 +44,7 @@ import {
   useRefreshFxData,
   useUpdateDevice,
 } from '../api/devices.js';
+import { useSetStreamConfig, useStreamStatus } from '../api/stage.js';
 import { ColorSlots, EffectControls, EffectPicker } from '../components/EffectControls.js';
 import { CommittedSlider } from '../components/CommittedSlider.js';
 import { NodeImportDialog } from '../components/NodeImportDialog.js';
@@ -294,6 +299,8 @@ export function DeviceControlPage() {
         </CardContent>
       </Card>
 
+      <WhiteBalanceCard deviceId={device.id} hasWhiteChannel={device.capabilities.white} />
+
       {/* --- Device settings --- */}
       <Card>
         <CardContent>
@@ -401,6 +408,120 @@ export function DeviceControlPage() {
 
       <NodeImportDialog sourceId={id} open={nodeImportOpen} onClose={() => setNodeImportOpen(false)} />
     </Stack>
+  );
+}
+
+function WhiteBalanceCard({
+  deviceId,
+  hasWhiteChannel,
+}: {
+  deviceId: number;
+  hasWhiteChannel: boolean;
+}) {
+  const { data: status } = useStreamStatus();
+  const setConfig = useSetStreamConfig();
+  const wb = status?.devices.find((d) => d.deviceId === deviceId)?.whiteBalance ?? null;
+  const enabled = wb?.enabled ?? false;
+
+  const [kelvin, setKelvin] = useState(wb?.kelvin ?? WHITE_BALANCE_NEUTRAL_K);
+  // Only adopt a server value that isn't just an echo of our own last commit —
+  // otherwise the ~5 s idle poll snaps the slider back mid-adjust.
+  const lastCommitted = useRef(kelvin);
+  useEffect(() => {
+    if (wb?.kelvin != null && wb.kelvin !== lastCommitted.current) {
+      lastCommitted.current = wb.kelvin;
+      setKelvin(wb.kelvin);
+    }
+  }, [wb?.kelvin]);
+
+  const commit = (next: { enabled: boolean; kelvin: number }) => {
+    lastCommitted.current = next.kelvin;
+    setConfig.mutate({ deviceId, whiteBalance: next.enabled ? next : null });
+  };
+
+  const gain = kelvinToRgbGain(kelvin);
+  const swatch = enabled
+    ? `rgb(${gain.map((g) => Math.round(255 * g)).join(', ')})`
+    : md3.surfaceContainerHighest;
+
+  return (
+    <Card>
+      <CardContent>
+        <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={2}>
+          <Box>
+            <Typography variant="h4">White balance</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Correct the white point of an RGB strip with no white channel. Applied to the realtime
+              stream (Studio, painter, solid) and mirrored on the Studio preview — it never changes
+              the device&apos;s own presets.
+            </Typography>
+          </Box>
+          <Switch
+            checked={enabled}
+            disabled={hasWhiteChannel}
+            onChange={(e) => commit({ enabled: e.target.checked, kelvin })}
+          />
+        </Stack>
+
+        {hasWhiteChannel ? (
+          <Alert severity="info" sx={{ mt: 2 }}>
+            This device has a hardware white channel — use its colour-temperature control instead.
+          </Alert>
+        ) : (
+          <Box
+            sx={{
+              mt: 2,
+              opacity: enabled ? 1 : 0.45,
+              pointerEvents: enabled ? 'auto' : 'none',
+            }}
+          >
+            <Stack direction="row" spacing={2} alignItems="center">
+              <Box
+                sx={{
+                  width: 44,
+                  height: 44,
+                  flexShrink: 0,
+                  borderRadius: 1,
+                  bgcolor: swatch,
+                  border: `1px solid ${md3.outline}`,
+                }}
+              />
+              <Box sx={{ flex: 1 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  {kelvin} K
+                  {kelvin === WHITE_BALANCE_NEUTRAL_K && (
+                    <Typography component="span" variant="caption" color="text.secondary">
+                      {' '}
+                      · neutral
+                    </Typography>
+                  )}
+                </Typography>
+                <CommittedSlider
+                  min={WHITE_BALANCE_MIN_K}
+                  max={WHITE_BALANCE_MAX_K}
+                  step={100}
+                  marks={[2700, 4000, WHITE_BALANCE_NEUTRAL_K, 10000].map((v) => ({
+                    value: v,
+                    label: String(v),
+                  }))}
+                  value={kelvin}
+                  formatValue={(v) => `${v} K`}
+                  valueLabelDisplay="auto"
+                  onCommit={(v) => {
+                    setKelvin(v);
+                    commit({ enabled: true, kelvin: v });
+                  }}
+                />
+              </Box>
+            </Stack>
+            <Typography variant="caption" color="text.secondary">
+              Warmer (&lt; {WHITE_BALANCE_NEUTRAL_K} K) knocks back green &amp; blue; cooler knocks
+              back red. The swatch shows what a full-white pixel becomes on the wire.
+            </Typography>
+          </Box>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

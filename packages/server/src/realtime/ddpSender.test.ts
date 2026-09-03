@@ -27,6 +27,7 @@ function target(over: Partial<DdpTarget>): DdpTarget {
     pixelOffset: 0,
     transport: 'ddp',
     maxFps: null,
+    gain: null,
     ...over,
   };
 }
@@ -64,6 +65,22 @@ describe('DdpSender transport routing', () => {
     expect(rx.packets[0]![2]).toBe(0); // start index hi
     expect(rx.packets[0]![3]).toBe(0); // start index lo
     expect(rx.packets[0]!.length).toBe(4 + 12 * 3);
+  });
+
+  it('applies a per-device RGB gain to the frame', async () => {
+    const rx = await receiver(14050);
+    sender = new DdpSender({ fps: 40 });
+    // gain halves green, quarters blue, leaves red
+    sender.start(
+      [target({ ddpPort: 14050, ledCount: 2, gain: [1, 0.5, 0.25] })],
+      solidFrameProducer([200, 200, 200]),
+    );
+    await wait(120);
+    rx.close();
+
+    const body = rx.packets[0]!.subarray(10); // strip the 10-byte DDP header
+    expect([...body.subarray(0, 3)]).toEqual([200, 100, 50]);
+    expect([...body.subarray(3, 6)]).toEqual([200, 100, 50]);
   });
 
   it('honours a per-device fps cap (roughly)', async () => {

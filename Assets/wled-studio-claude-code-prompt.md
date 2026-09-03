@@ -426,7 +426,17 @@ Stop after each milestone and report.
 
 ## Planned additions (slot into a later milestone)
 
-### Per-device white balance (milestone 7)
+### Per-device white balance (milestone 7) — DONE (v0.8.0)
+
+> Shipped: `White balance` card on `/devices/<id>` (Kelvin slider 2000–10000,
+> defaults OFF, disabled for RGBW devices). `kelvinToRgbGain()` in `@ewc/core`
+> (6500 K = identity). The realtime sender multiplies each device's outgoing RGB
+> by its gain before packing; the Studio preview applies the same gain to that
+> device's fixture dots (the shared canvas can't carry multiple white points, so
+> its background is left untinted). This milestone *created* the per-device
+> post-sample stage the text below calls "the same stage as brightness/gamma" —
+> `brightnessPolicy` / `deviceGamma` are still stored-but-unapplied. Original
+> spec below.
 
 On the device settings page (`/devices/<id>`), a **white-balance** control for RGB
 strips that have no dedicated white channel:

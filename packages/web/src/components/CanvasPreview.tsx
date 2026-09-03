@@ -28,6 +28,8 @@ interface Props {
   /** Wall-clock ms to seed the animation clock from (the live stream's origin),
    *  so the preview stays phase-locked to the wire. Omit to free-run from mount. */
   epochMs?: number | null;
+  /** Per-device RGB gain (white balance) applied to that device's fixture dots. */
+  deviceGains?: Record<number, readonly [number, number, number]>;
 }
 
 type Corner = 'nw' | 'ne' | 'sw' | 'se';
@@ -69,11 +71,12 @@ export function CanvasPreview({
   onSelectLayer,
   onLayerRect,
   epochMs = null,
+  deviceGains,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const state = useRef({ scene, installation, playing, showFixtures, epochMs });
-  state.current = { scene, installation, playing, showFixtures, epochMs };
+  const state = useRef({ scene, installation, playing, showFixtures, epochMs, deviceGains });
+  state.current = { scene, installation, playing, showFixtures, epochMs, deviceGains };
   const drag = useRef<
     | { id: string; mode: 'move' | Corner; startRect: LayerRect; px: number; py: number }
     | null
@@ -129,9 +132,21 @@ export function CanvasPreview({
       ctx.putImageData(img, 0, 0);
 
       if (s.showFixtures && s.installation) {
+        // Fixture dots show the actual sampled colour, with each device's white
+        // balance applied — the one place the preview can reflect a per-device
+        // correction (the shared canvas can't carry three white points).
         for (const led of mapInstallation(s.installation)) {
-          ctx.fillStyle = 'rgba(255,255,255,0.30)';
-          ctx.fillRect(led.x * w - 0.6, led.y * h - 0.6, 1.6, 1.6);
+          const c = sampleScene(s.scene, led.x, led.y, t);
+          const g = s.deviceGains?.[led.deviceId];
+          const r = g ? c[0] * g[0] : c[0];
+          const gr = g ? c[1] * g[1] : c[1];
+          const b = g ? c[2] * g[2] : c[2];
+          const px = led.x * w;
+          const py = led.y * h;
+          ctx.fillStyle = 'rgba(0,0,0,0.55)';
+          ctx.fillRect(px - 1.6, py - 1.6, 3.2, 3.2);
+          ctx.fillStyle = `rgb(${r | 0},${gr | 0},${b | 0})`;
+          ctx.fillRect(px - 1, py - 1, 2, 2);
         }
       }
       raf = requestAnimationFrame(frame);

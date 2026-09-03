@@ -33,6 +33,7 @@ import {
   FULL_RECT,
   effectDefaults,
   getEffect,
+  kelvinToRgbGain,
   listEffects,
   makeLayer,
   type BlendMode,
@@ -293,6 +294,14 @@ export function StudioPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scene, liveSync, sceneRunning]);
 
+  const deviceGains = useMemo(() => {
+    const m: Record<number, readonly [number, number, number]> = {};
+    for (const d of stream?.devices ?? []) {
+      if (d.whiteBalance?.enabled) m[d.deviceId] = kelvinToRgbGain(d.whiteBalance.kelvin);
+    }
+    return m;
+  }, [stream?.devices]);
+
   const orphanFixtures = useMemo(() => {
     if (!installation || !devices) return [];
     const known = new Set(devices.map((d) => d.id));
@@ -375,6 +384,7 @@ export function StudioPage() {
             playing
             editable
             showFloorplan={showFloorplan}
+            deviceGains={deviceGains}
             epochMs={streamingThis ? stream?.epochMs ?? null : null}
             selectedLayerId={selectedId}
             onSelectLayer={setSelectedId}
