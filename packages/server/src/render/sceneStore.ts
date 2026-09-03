@@ -21,6 +21,20 @@ const media = z.object({
   kind: z.enum(['image', 'video']).optional(),
   naturalWidth: z.number().positive(),
   naturalHeight: z.number().positive(),
+  // video (8b/8c)
+  durationMs: z.number().nonnegative().optional(),
+  trimInMs: z.number().nonnegative().optional(),
+  trimOutMs: z.number().nonnegative().optional(),
+  playbackType: z.enum(['loop', 'hold', 'hide']).optional(),
+  // Transient transport state — accepted so it reaches the live producer, but
+  // stripped before persistence (see `stripTransient`).
+  playback: z
+    .object({
+      state: z.enum(['playing', 'paused', 'stopped']),
+      anchorMs: z.number(),
+      headMs: z.number(),
+    })
+    .nullish(),
 });
 
 const layer = z.object({
@@ -44,6 +58,22 @@ export const sceneSchema = z.object({
   background: rgb,
   layers: z.array(layer).max(24),
 });
+
+type ParsedScene = z.infer<typeof sceneSchema>;
+
+/**
+ * Remove state that must not persist: a video layer's `playback` is a live
+ * transport position (like a console fader) — on reload it's reconstructed from
+ * `playbackType`. `trimInMs` / `trimOutMs` / `playbackType` DO persist.
+ */
+function stripTransient(scene: ParsedScene): ParsedScene {
+  return {
+    ...scene,
+    layers: scene.layers.map((l) =>
+      l.media ? { ...l, media: { ...l.media, playback: undefined } } : l,
+    ),
+  };
+}
 
 interface SceneRow {
   id: number;
@@ -94,7 +124,7 @@ export class SceneStore {
   }
 
   create(name: string, scene: unknown): SceneDTO {
-    const parsed = sceneSchema.parse({ ...(scene as object), name });
+    const parsed = stripTransient(sceneSchema.parse({ ...(scene as object), name }));
     const info = this.db
       .prepare('INSERT INTO scenes (name, data_json) VALUES (?, ?)')
       .run(name, JSON.stringify(parsed));
@@ -102,7 +132,7 @@ export class SceneStore {
   }
 
   update(id: number, name: string, scene: unknown): SceneDTO | null {
-    const parsed = sceneSchema.parse({ ...(scene as object), name });
+    const parsed = stripTransient(sceneSchema.parse({ ...(scene as object), name }));
     const info = this.db
       .prepare(`UPDATE scenes SET name = ?, data_json = ?, updated_at = datetime('now') WHERE id = ?`)
       .run(name, JSON.stringify(parsed), id);

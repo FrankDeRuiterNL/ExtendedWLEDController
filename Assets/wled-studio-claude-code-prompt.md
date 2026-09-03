@@ -466,13 +466,20 @@ strips that have no dedicated white channel:
 > feeds both consumers: the browser plays it in a hidden `<video>` for the
 > preview, the server decodes it once to an in-memory RGBA frame buffer
 > (process-wide cache, keyed by asset id, survives producer hot-swap) for the
-> wire. The clip **loops continuously** — `videoFrameIndex(tMs, fps, count)` off
-> the stream's `epochMs`. Preview `<video>` is nudged toward the wall clock when
-> streaming (±150 ms threshold, so it can sit ~3 frames off — fine for a loop).
-> **Deferred to 8c:** Trim Duration, Playback Type (hold-last-frame /
-> hide-when-stopped / loop), Playback Controls (play/pause/stop/loop), tight
-> preview phase-lock. **Also deferred:** orphan-asset GC — discarded media
-> accumulates under `/data/media`; the 501 branch (no ffmpeg) is untested.
+> wire.
+> 8c (v0.11.0): **transport + trim**. `MediaLayerSpec` gains `durationMs`,
+> `trimInMs`, `trimOutMs`, `playbackType` (`loop` | `hold` | `hide`) and a
+> **transient** `playback` (`{state, anchorMs, headMs}`, wall-clock
+> parametrised). `resolveMediaFrameIndex(spec, timing, Date.now())` — pure,
+> shared by the server producer and the browser (which drives its `<video>`
+> element by it). Inspector gets a Playback-type select, a dual-handle Trim
+> slider, and play / pause / stop / loop transport buttons. On save `playback`
+> is stripped (`sceneSchema` keeps it for the live stream path; `SceneStore`
+> strips it before persisting); on load it's reconstructed from `playbackType`.
+> **Deferred:** orphan-asset GC — discarded media accumulates under
+> `/data/media`; the 501 branch (no ffmpeg) is untested; cross-host clock skew
+> between browser and container can offset preview vs wall (same assumption the
+> effect phase-lock already makes).
 
 Today every Studio layer is an effect. Split the layer type in two. The Studio
 **"+ Add"** button opens a small choice — **FX Layer** or **Media Layer** —

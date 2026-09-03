@@ -104,9 +104,9 @@ export function AppShell() {
               {[
                 { to: '/devices', label: 'Devices' },
                 { to: '/layout', label: 'Layout' },
-                { to: '/studio', label: 'Studio' },
+                { to: '/studio', label: 'Scenes' },
                 { to: '/paint', label: 'Paint' },
-                { to: '/stage', label: 'Stage' },
+                { to: '/stage', label: 'System' },
               ].map((n) => (
                 <Button
                   key={n.to}

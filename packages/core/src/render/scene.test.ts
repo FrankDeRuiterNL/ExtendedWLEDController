@@ -8,10 +8,12 @@ import {
   fitMediaRect,
   makeLayer,
   makeMediaLayer,
+  resolveMediaFrameIndex,
+  resolveMediaPositionMs,
   sampleScene,
   unknownEffectIds,
-  videoFrameIndex,
   type MediaFrame,
+  type MediaPlayback,
   type Scene,
 } from './scene.js';
 import { defaultParamValues } from './types.js';
@@ -293,19 +295,54 @@ describe('media layers', () => {
   });
 });
 
-describe('videoFrameIndex', () => {
-  it('advances one frame per 1/fps second and wraps at frameCount', () => {
-    expect(videoFrameIndex(0, 20, 100)).toBe(0);
-    expect(videoFrameIndex(50, 20, 100)).toBe(1); // 0.05 s * 20 fps
-    expect(videoFrameIndex(999, 20, 100)).toBe(19);
-    expect(videoFrameIndex(5000, 20, 100)).toBe(0); // 100 frames → wrap
-    expect(videoFrameIndex(5050, 20, 100)).toBe(1);
+describe('resolveMediaPositionMs / resolveMediaFrameIndex', () => {
+  const playing = (headMs: number, anchorMs = 0): MediaPlayback => ({ state: 'playing', anchorMs, headMs });
+  const timing = { fps: 20, frameCount: 200, durationMs: 10_000 };
+
+  it('loops within the trimmed window while playing', () => {
+    const spec = { trimInMs: 2000, trimOutMs: 6000, playbackType: 'loop' as const, playback: playing(0) };
+    expect(resolveMediaPositionMs(spec, 10_000, 0)).toBe(0);
+    expect(resolveMediaPositionMs(spec, 10_000, 3000)).toBe(3000);
+    expect(resolveMediaPositionMs(spec, 10_000, 4000)).toBe(0); // window is 4000 ms → wrap
+    expect(resolveMediaPositionMs(spec, 10_000, 9000)).toBe(1000);
   });
 
-  it('is defensive about degenerate inputs', () => {
-    expect(videoFrameIndex(1234, 20, 0)).toBe(0);
-    expect(videoFrameIndex(1234, 0, 100)).toBe(0);
-    expect(videoFrameIndex(-100, 20, 100)).toBe(0);
-    expect(videoFrameIndex(Number.NaN, 20, 100)).toBe(0);
+  it('frame index accounts for trim-in offset and clamps to the clip', () => {
+    const spec = { trimInMs: 2000, trimOutMs: 6000, playbackType: 'loop' as const, playback: playing(0) };
+    // pos 1000 ms within window → clip time 3000 ms → frame 60
+    expect(resolveMediaFrameIndex(spec, timing, 1000)).toBe(60);
+    expect(resolveMediaFrameIndex(spec, { ...timing, frameCount: 10 }, 1000)).toBe(9);
+  });
+
+  it("'hold' freezes on the trim-out frame after the window elapses", () => {
+    const spec = { trimInMs: 0, trimOutMs: 4000, playbackType: 'hold' as const, playback: playing(0) };
+    expect(resolveMediaPositionMs(spec, 10_000, 2000)).toBe(2000);
+    expect(resolveMediaPositionMs(spec, 10_000, 9999)).toBe(4000); // held at window end
+  });
+
+  it("'hide' contributes nothing when stopped or past the end", () => {
+    const hideStopped = { playbackType: 'hide' as const, playback: { state: 'stopped' as const, anchorMs: 0, headMs: 0 } };
+    expect(resolveMediaPositionMs(hideStopped, 10_000, 5000)).toBeNull();
+    expect(resolveMediaFrameIndex(hideStopped, timing, 5000)).toBeNull();
+
+    const hideEnded = { trimOutMs: 3000, playbackType: 'hide' as const, playback: playing(0) };
+    expect(resolveMediaPositionMs(hideEnded, 10_000, 4000)).toBeNull();
+  });
+
+  it('paused holds the head; stopped (non-hide) shows the trim-in frame', () => {
+    const paused = { trimInMs: 1000, playbackType: 'hold' as const, playback: { state: 'paused' as const, anchorMs: 0, headMs: 1500 } };
+    expect(resolveMediaPositionMs(paused, 10_000, 99_999)).toBe(1500);
+
+    const stopped = { trimInMs: 1000, playbackType: 'hold' as const, playback: { state: 'stopped' as const, anchorMs: 0, headMs: 0 } };
+    expect(resolveMediaPositionMs(stopped, 10_000, 99_999)).toBe(0);
+    expect(resolveMediaFrameIndex(stopped, timing, 99_999)).toBe(20); // clip time = trimIn 1000 ms → frame 20
+  });
+
+  it('defaults to a playing loop when no playback state is present', () => {
+    const spec = { playbackType: 'loop' as const };
+    // default anchor == nowMs so pos is 0 at that instant
+    expect(resolveMediaPositionMs(spec, 10_000, 1234)).toBe(0);
+    const held = { playbackType: 'hold' as const };
+    expect(resolveMediaPositionMs(held, 10_000, 1234)).toBe(0); // default state 'stopped' → trim-in frame
   });
 });

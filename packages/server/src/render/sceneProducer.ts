@@ -1,10 +1,12 @@
 import {
+  defaultMediaPlayback,
   mapInstallation,
+  resolveMediaFrameIndex,
   sampleScene,
-  videoFrameIndex,
   type Installation,
   type MappedLed,
   type MediaFrame,
+  type MediaLayerSpec,
   type Scene,
 } from '@ewc/core';
 import type { FrameProducer } from '../realtime/ddpSender.js';
@@ -16,8 +18,15 @@ import { log } from '../logger.js';
 interface VideoLayerState {
   fps: number;
   frameCount: number;
+  durationMs: number;
   width: number;
   height: number;
+  /**
+   * The layer's media spec with a **stable** `playback` — synthesised once here
+   * if the scene arrived without one (a persisted scene has it stripped), so a
+   * loop clip doesn't restart from frame 0 on every provider rebuild.
+   */
+  spec: MediaLayerSpec;
   /** `frameCount * width * height * 4` RGBA bytes; null until the decode lands. */
   data: Uint8ClampedArray | null;
 }
@@ -47,11 +56,17 @@ function buildMediaProvider(scene: Scene, media: MediaStore | undefined) {
           data: new Uint8ClampedArray(asset.data.buffer, asset.data.byteOffset, asset.data.length),
         });
       } else {
+        const spec: MediaLayerSpec = {
+          ...layer.media,
+          playback: layer.media.playback ?? defaultMediaPlayback(layer.media.playbackType, Date.now()),
+        };
         const st: VideoLayerState = {
           fps: asset.fps,
           frameCount: asset.frameCount,
+          durationMs: asset.durationMs,
           width: asset.width,
           height: asset.height,
+          spec,
           data: null,
         };
         videos.set(layer.id, st);
@@ -76,19 +91,28 @@ function buildMediaProvider(scene: Scene, media: MediaStore | undefined) {
   let cached: Map<string, MediaFrame> = images;
 
   return {
-    /** Frames for all media layers at `tMs`. Memoised within a tick (all devices
-     *  in one tick share the time), so the per-device producer calls are free. */
-    frameAt(tMs: number): Map<string, MediaFrame> {
-      if (tMs === cachedAtMs) return cached;
+    /**
+     * Frames for all media layers **now** (wall clock — video playback is
+     * parametrised against `Date.now()` so preview and wire agree). Memoised
+     * within a tick; the per-device producer calls in one tick see one time.
+     */
+    frameAt(): Map<string, MediaFrame> {
+      const now = Date.now();
+      if (now === cachedAtMs) return cached;
       if (videos.size === 0) {
-        cachedAtMs = tMs;
+        cachedAtMs = now;
         cached = images;
         return images;
       }
       const out = new Map(images);
       for (const [layerId, v] of videos) {
         if (!v.data || v.frameCount <= 0) continue;
-        const idx = videoFrameIndex(tMs, v.fps, v.frameCount);
+        const idx = resolveMediaFrameIndex(
+          v.spec,
+          { fps: v.fps, frameCount: v.frameCount, durationMs: v.durationMs },
+          now,
+        );
+        if (idx == null) continue; // hidden this instant (a stopped/ended 'hide' clip)
         const stride = v.width * v.height * 4;
         out.set(layerId, {
           width: v.width,
@@ -96,7 +120,7 @@ function buildMediaProvider(scene: Scene, media: MediaStore | undefined) {
           data: new Uint8ClampedArray(v.data.buffer, v.data.byteOffset + idx * stride, stride),
         });
       }
-      cachedAtMs = tMs;
+      cachedAtMs = now;
       cached = out;
       return out;
     },
@@ -135,7 +159,7 @@ export function sceneFrameProducer(
     const leds = byDevice.get(target.deviceId);
     if (!leds) return buf;
 
-    const mediaFrames = provider.frameAt(tMs);
+    const mediaFrames = provider.frameAt();
     const t = tMs / 1000;
     for (const led of leds) {
       const o = led.index * bpl;

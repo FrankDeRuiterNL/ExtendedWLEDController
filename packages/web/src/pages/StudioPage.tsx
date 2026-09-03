@@ -27,12 +27,16 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import PauseIcon from '@mui/icons-material/Pause';
 import StopIcon from '@mui/icons-material/Stop';
+import RepeatIcon from '@mui/icons-material/Repeat';
 import SaveIcon from '@mui/icons-material/Save';
+import { Slider } from '@mui/material';
 import {
   BLEND_MODES,
   EMPTY_SCENE,
   FULL_RECT,
+  defaultMediaPlayback,
   effectDefaults,
   fitMediaRect,
   getEffect,
@@ -40,9 +44,12 @@ import {
   listEffects,
   makeLayer,
   makeMediaLayer,
+  resolveMediaPositionMs,
   type BlendMode,
   type Layer,
   type LayerRect,
+  type MediaLayerSpec,
+  type MediaPlaybackType,
   type Scene,
 } from '@ewc/core';
 import { CanvasPreview } from '../components/CanvasPreview.js';
@@ -131,6 +138,173 @@ function RegionEditor({ rect, onChange }: { rect: LayerRect; onChange: (r: Layer
         the preview to move it, corners to resize.
       </Typography>
     </Stack>
+  );
+}
+
+const PLAYBACK_TYPES: { value: MediaPlaybackType; label: string }[] = [
+  { value: 'loop', label: 'Loop indefinitely' },
+  { value: 'hold', label: 'Play + hold last frame' },
+  { value: 'hide', label: 'Play + hide when stopped' },
+];
+
+/** `123456` → `2:03.4` */
+function fmtClock(ms: number): string {
+  const s = Math.max(0, ms) / 1000;
+  const m = Math.floor(s / 60);
+  const rest = s - m * 60;
+  return `${m}:${rest.toFixed(1).padStart(4, '0')}`;
+}
+
+/** Transport + trim for a **video** media layer. */
+function MediaPlaybackControls({
+  media,
+  onPatch,
+}: {
+  media: MediaLayerSpec;
+  onPatch: (m: MediaLayerSpec) => void;
+}) {
+  const duration = Math.max(0, media.durationMs ?? 0);
+  const trimIn = Math.min(media.trimInMs ?? 0, duration);
+  const trimOut = Math.min(media.trimOutMs ?? duration, duration);
+  const type = media.playbackType ?? 'loop';
+  const state = (media.playback ?? defaultMediaPlayback(type, Date.now())).state;
+
+  const [trim, setTrim] = useState<[number, number]>([trimIn, trimOut]);
+  const dragging = useRef(false);
+  useEffect(() => {
+    if (!dragging.current) setTrim([trimIn, trimOut]);
+  }, [trimIn, trimOut]);
+
+  const setState = (next: 'playing' | 'paused' | 'stopped') => {
+    const now = Date.now();
+    const head = next === 'stopped' ? 0 : resolveMediaPositionMs(media, duration, now) ?? 0;
+    onPatch({ ...media, playback: { state: next, anchorMs: now, headMs: head } });
+  };
+  const setType = (next: MediaPlaybackType) => {
+    // Re-anchor so playback keeps its current position under the new rule.
+    const now = Date.now();
+    const head = resolveMediaPositionMs(media, duration, now) ?? 0;
+    const curState = (media.playback ?? defaultMediaPlayback(type, now)).state;
+    onPatch({
+      ...media,
+      playbackType: next,
+      playback: { state: curState === 'stopped' && next === 'loop' ? 'playing' : curState, anchorMs: now, headMs: head },
+    });
+  };
+  const commitTrim = ([a, b]: number[]) => {
+    dragging.current = false;
+    const lo = Math.min(a!, b!);
+    const hi = Math.max(a!, b!);
+    onPatch({
+      ...media,
+      trimInMs: lo <= 0 ? undefined : lo,
+      trimOutMs: hi >= duration ? undefined : hi,
+    });
+  };
+
+  return (
+    <>
+      <Divider>
+        <Typography variant="caption" color="text.secondary">
+          Playback
+        </Typography>
+      </Divider>
+
+      <TextField
+        select
+        size="small"
+        label="Playback type"
+        value={type}
+        onChange={(e) => setType(e.target.value as MediaPlaybackType)}
+      >
+        {PLAYBACK_TYPES.map((p) => (
+          <MenuItem key={p.value} value={p.value}>
+            {p.label}
+          </MenuItem>
+        ))}
+      </TextField>
+
+      {duration > 0 && (
+        <Box>
+          <Stack direction="row" justifyContent="space-between">
+            <Typography variant="body2">Trim</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {fmtClock(trim[0])} – {fmtClock(trim[1])}
+            </Typography>
+          </Stack>
+          <Box sx={{ px: 0.5 }}>
+            <Slider
+              size="small"
+              min={0}
+              max={duration}
+              step={50}
+              value={trim}
+              valueLabelDisplay="auto"
+              valueLabelFormat={fmtClock}
+              onChange={(_, v) => {
+                dragging.current = true;
+                setTrim(v as [number, number]);
+              }}
+              onChangeCommitted={(_, v) => commitTrim(v as number[])}
+              disableSwap
+            />
+          </Box>
+        </Box>
+      )}
+
+      <Stack direction="row" spacing={0.5} alignItems="center">
+        <Tooltip title={state === 'playing' ? 'Playing' : 'Play'}>
+          <span>
+            <IconButton
+              size="small"
+              color={state === 'playing' ? 'primary' : 'default'}
+              disabled={state === 'playing'}
+              onClick={() => setState('playing')}
+            >
+              <PlayArrowIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Pause">
+          <span>
+            <IconButton
+              size="small"
+              color={state === 'paused' ? 'primary' : 'default'}
+              disabled={state !== 'playing'}
+              onClick={() => setState('paused')}
+            >
+              <PauseIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Stop (back to start)">
+          <span>
+            <IconButton
+              size="small"
+              color={state === 'stopped' ? 'primary' : 'default'}
+              disabled={state === 'stopped'}
+              onClick={() => setState('stopped')}
+            >
+              <StopIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Box sx={{ flex: 1 }} />
+        <Tooltip title={type === 'loop' ? 'Looping' : 'Loop'}>
+          <IconButton
+            size="small"
+            color={type === 'loop' ? 'primary' : 'default'}
+            onClick={() => setType(type === 'loop' ? 'hold' : 'loop')}
+          >
+            <RepeatIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Stack>
+      <Typography variant="caption" color="text.secondary">
+        Transport drives the preview and the live stream. It is not saved with the scene —
+        on reload the clip {type === 'loop' ? 'starts looping' : 'waits at the start'}.
+      </Typography>
+    </>
   );
 }
 
@@ -226,9 +400,13 @@ function MediaLayerInspector({
           )}
           <Typography variant="caption" color="text.secondary">
             {isVideo
-              ? 'The clip loops continuously. Trim points and play / pause / stop controls come in the next update.'
+              ? 'Fixtures under the box take their colour from the video frame playing now.'
               : 'Fixtures under the box take their colour from the media. Images are still; upload an .mp4 / .mov for motion.'}
           </Typography>
+
+          {isVideo && media && (
+            <MediaPlaybackControls media={media} onPatch={(m) => onPatch({ media: m })} />
+          )}
 
           <Divider>
             <Typography variant="caption" color="text.secondary">
@@ -353,10 +531,19 @@ export function StudioPage() {
 
   useEffect(() => {
     if (pendingLoad != null && loaded && loaded.id === pendingLoad) {
-      setScene(structuredClone(loaded.scene));
+      const fresh = structuredClone(loaded.scene);
+      // Transport state isn't persisted — reconstruct it from the playback type
+      // so a "Loop indefinitely" clip runs and the others wait at the start.
+      const now = Date.now();
+      for (const l of fresh.layers) {
+        if (l.media?.kind === 'video' && !l.media.playback) {
+          l.media.playback = defaultMediaPlayback(l.media.playbackType, now);
+        }
+      }
+      setScene(fresh);
       setDirty(false);
       setLiveSync(false); // a freshly loaded scene isn't the one on the wire
-      setSelectedId(loaded.scene.layers[0]?.id ?? null);
+      setSelectedId(fresh.layers[0]?.id ?? null);
       setPendingLoad(null);
     }
   }, [loaded, pendingLoad]);
@@ -393,6 +580,7 @@ export function StudioPage() {
     setDirty(true);
   };
   const setLayerMedia = (id: string, m: UploadedMedia) => {
+    const isVideo = m.kind === 'video';
     patchLayer(id, {
       media: {
         assetId: m.assetId,
@@ -400,6 +588,13 @@ export function StudioPage() {
         kind: m.kind ?? 'image',
         naturalWidth: m.naturalWidth,
         naturalHeight: m.naturalHeight,
+        ...(isVideo
+          ? {
+              durationMs: m.durationMs,
+              playbackType: 'loop' as const,
+              playback: defaultMediaPlayback('loop', Date.now()),
+            }
+          : {}),
       },
       rect: fitMediaRect(m.naturalWidth, m.naturalHeight, {
         width: installation?.canvas.width ?? 16,
@@ -511,9 +706,9 @@ export function StudioPage() {
     <Stack spacing={3}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1}>
         <Box>
-          <Typography variant="h2">Studio</Typography>
+          <Typography variant="h2">Scenes</Typography>
           <Typography variant="body2" color="text.secondary">
-            Stack effect layers on the shared canvas. Preview here, then stream it to the fixtures.
+            Stack effect and media layers on the shared canvas. Preview here, then stream it to the fixtures.
           </Typography>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
@@ -720,7 +915,14 @@ export function StudioPage() {
                     (l.media !== undefined
                       ? l.media?.filename || 'Media layer'
                       : def?.name || l.effectId);
-                  const mediaTag = l.media?.kind === 'video' ? ' · video' : l.media !== undefined ? ' · image' : '';
+                  const mediaTag =
+                    l.media === undefined
+                      ? ''
+                      : l.media === null
+                        ? ' · media'
+                        : l.media.kind === 'video'
+                          ? ' · video'
+                          : ' · image';
                   return (
                     <Stack
                       key={l.id}

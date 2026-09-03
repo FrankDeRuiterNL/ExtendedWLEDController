@@ -4,6 +4,7 @@ import {
   FULL_RECT,
   mapFixture,
   mapInstallation,
+  resolveMediaPositionMs,
   sampleScene,
   type Installation,
   type LayerRect,
@@ -211,20 +212,41 @@ export function CanvasPreview({
           ? (Date.now() - s.epochMs) / 1000
           : (now - start) / 1000;
 
-      // Merge the current frame of every playing <video> layer over the still
-      // images. Sampled from the same transcoded clip the wire decodes.
+      // Merge the current frame of every <video> layer over the still images.
+      // The <video> element is driven by the same `resolveMediaPositionMs` the
+      // wire uses (against `Date.now()`), so preview and wall agree.
       let mediaFrames = s.mediaImages;
       if (videosRef.current.size > 0) {
         mediaFrames = new Map(s.mediaImages);
+        const nowMs = Date.now();
         for (const [layerId, v] of videosRef.current) {
           const vid = v.el;
           if (vid.readyState < 2 || !vid.videoWidth) continue;
-          // Nudge toward the wall clock when streaming, without constant seeking.
-          if (s.playing && s.epochMs != null && vid.duration > 0) {
-            const wanted = ((Date.now() - s.epochMs) / 1000) % vid.duration;
-            if (Math.abs(vid.currentTime - wanted) > 0.15) vid.currentTime = wanted;
+          const media = s.scene.layers.find((l) => l.id === layerId)?.media;
+          const durationMs = media?.durationMs || vid.duration * 1000 || 0;
+          const pos = media
+            ? resolveMediaPositionMs(media, durationMs, nowMs)
+            : (nowMs / 1000) % (vid.duration || 1) * 1000;
+
+          if (pos == null) {
+            // hidden right now (a stopped/ended 'hide' clip) — leave the layer
+            // with no frame so it contributes nothing.
+            if (!vid.paused) vid.pause();
+            continue;
           }
-          if (vid.paused && s.playing) void vid.play().catch(() => {});
+          const wantSec = ((media?.trimInMs ?? 0) + pos) / 1000;
+          const playing = (media?.playback?.state ?? (media?.playbackType === 'loop' ? 'playing' : 'stopped')) === 'playing';
+          if (playing && vid.paused) void vid.play().catch(() => {});
+          if (!playing && !vid.paused) vid.pause();
+          // Correct drift; playing video advances on its own between corrections.
+          if (Math.abs(vid.currentTime - wantSec) > (playing ? 0.12 : 0.03)) {
+            try {
+              vid.currentTime = wantSec;
+            } catch {
+              /* seek not ready yet */
+            }
+          }
+
           const vc = v.canvas;
           if (vc.width !== vid.videoWidth || vc.height !== vid.videoHeight) {
             vc.width = vid.videoWidth;

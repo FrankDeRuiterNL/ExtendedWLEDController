@@ -452,7 +452,7 @@ function WhiteBalanceCard({
             <Typography variant="h4">White balance</Typography>
             <Typography variant="body2" color="text.secondary">
               Correct the white point of an RGB strip with no white channel. Applied to the realtime
-              stream (Studio, painter, solid) and mirrored on the Studio preview — it never changes
+              stream (Scenes, painter, solid) and mirrored on the Scenes preview — it never changes
               the device&apos;s own presets.
             </Typography>
           </Box>

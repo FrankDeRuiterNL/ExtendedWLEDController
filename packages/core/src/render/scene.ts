@@ -23,10 +23,35 @@ export interface LayerMask {
 }
 
 /**
- * A **media layer** shows an uploaded image (milestone 8a; video is 8b) on the
- * canvas. The pixels are supplied at render time by a {@link MediaFrames}
- * provider keyed by layer id — the browser fills it from a decoded `<img>`, the
- * server from the stored RGBA blob — so `@ewc/core` never decodes anything.
+ * How a **video** media layer plays (milestone 8c).
+ * - `loop`  — restart from the trim-in point every time playback reaches trim-out.
+ * - `hold`  — play once, then freeze on the trim-out frame.
+ * - `hide`  — play once, then the layer contributes nothing (layers below show).
+ */
+export type MediaPlaybackType = 'loop' | 'hold' | 'hide';
+
+/**
+ * Transport state for a video media layer. **Transient** — it is stripped when a
+ * scene is persisted (it lives only on the wire / in the editor, like a console
+ * fader), and reconstructed from {@link MediaLayerSpec.playbackType} on load.
+ *
+ * `anchorMs` / `headMs` are a wall-clock parametrisation: at wall time
+ * `anchorMs` the clip was at `headMs` (ms from trim-in), and while `playing` it
+ * advances in real time from there. Same-host clocks make preview and wire
+ * agree exactly (the effect phase-lock makes the same assumption).
+ */
+export interface MediaPlayback {
+  state: 'playing' | 'paused' | 'stopped';
+  anchorMs: number;
+  headMs: number;
+}
+
+/**
+ * A **media layer** shows an uploaded image (milestone 8a) or video (8b/8c) on
+ * the canvas. The pixels are supplied at render time by a {@link MediaFrames}
+ * provider keyed by layer id — the browser fills it from a decoded `<img>` or a
+ * `<video>`, the server from the stored blob — so `@ewc/core` never decodes
+ * anything.
  */
 export interface MediaLayerSpec {
   /** Server asset id for the decoded, downscaled RGBA blob (image) or mp4 (video). */
@@ -34,8 +59,8 @@ export interface MediaLayerSpec {
   /** Original upload name, shown in the inspector. */
   filename: string;
   /**
-   * `'video'` assets are a downscaled, no-audio clip the layer loops over time;
-   * `'image'` (the default when absent) is a single still frame.
+   * `'video'` assets are a downscaled, no-audio clip; `'image'` (the default
+   * when absent) is a single still frame.
    */
   kind?: 'image' | 'video';
   /**
@@ -45,16 +70,79 @@ export interface MediaLayerSpec {
    */
   naturalWidth: number;
   naturalHeight: number;
+
+  // --- video only (8b/8c) --------------------------------------------------
+  /** Full clip length (ms) — denormalised from the asset so the trim UI has a range. */
+  durationMs?: number;
+  /** Playback starts here (ms into the clip). Absent = 0. */
+  trimInMs?: number;
+  /** Playback ends here (ms into the clip). Absent = clip end. */
+  trimOutMs?: number;
+  /** What happens at the trim-out point. Absent = `'loop'`. */
+  playbackType?: MediaPlaybackType;
+  /** Transient transport state — see {@link MediaPlayback}. */
+  playback?: MediaPlayback | null;
+}
+
+const clampNum = (n: number, lo: number, hi: number) => (n < lo ? lo : n > hi ? hi : n);
+
+/** Effective transport state for a video layer when its `playback` is absent. */
+export function defaultMediaPlayback(
+  playbackType: MediaPlaybackType | undefined,
+  nowMs: number,
+): MediaPlayback {
+  return {
+    state: (playbackType ?? 'loop') === 'loop' ? 'playing' : 'stopped',
+    anchorMs: nowMs,
+    headMs: 0,
+  };
 }
 
 /**
- * Frame index for a video looping at `fps` over `frameCount` frames at wall-time
- * `tMs`. Loop-only for milestone 8b; trim + playback modes arrive in 8c.
+ * Position within the **trimmed window** (ms from trim-in) for a video layer at
+ * wall time `nowMs`, or `null` when the layer should contribute nothing right
+ * now (a `hide`-type clip that is stopped or has run past its end).
  */
-export function videoFrameIndex(tMs: number, fps: number, frameCount: number): number {
-  if (frameCount <= 0 || fps <= 0 || !Number.isFinite(tMs)) return 0;
-  const f = Math.floor((Math.max(0, tMs) / 1000) * fps);
-  return ((f % frameCount) + frameCount) % frameCount;
+export function resolveMediaPositionMs(
+  spec: Pick<MediaLayerSpec, 'trimInMs' | 'trimOutMs' | 'playbackType' | 'playback'>,
+  durationMs: number,
+  nowMs: number,
+): number | null {
+  const dur = Math.max(0, durationMs || 0);
+  const trimIn = clampNum(spec.trimInMs ?? 0, 0, dur);
+  const trimOut = clampNum(spec.trimOutMs ?? dur, trimIn, dur);
+  const win = trimOut - trimIn;
+  const type = spec.playbackType ?? 'loop';
+  const pb = spec.playback ?? defaultMediaPlayback(type, nowMs);
+
+  if (pb.state === 'stopped') return type === 'hide' ? null : 0;
+  if (win <= 0) return 0;
+
+  let pos = pb.state === 'playing' ? pb.headMs + (nowMs - pb.anchorMs) : pb.headMs;
+  if (!Number.isFinite(pos) || pos < 0) pos = 0;
+
+  if (pos >= win) {
+    if (type === 'loop') pos %= win;
+    else return type === 'hide' ? null : win; // hold the last frame
+  }
+  return pos;
+}
+
+/**
+ * Decoded-clip frame index for a video layer at wall time `nowMs`, or `null` to
+ * hide the layer. `timing` comes from the **asset** (authoritative), not the
+ * layer spec.
+ */
+export function resolveMediaFrameIndex(
+  spec: Pick<MediaLayerSpec, 'trimInMs' | 'trimOutMs' | 'playbackType' | 'playback'>,
+  timing: { fps: number; frameCount: number; durationMs: number },
+  nowMs: number,
+): number | null {
+  const pos = resolveMediaPositionMs(spec, timing.durationMs, nowMs);
+  if (pos == null) return null;
+  const clipMs = (spec.trimInMs ?? 0) + pos;
+  const idx = Math.floor((clipMs / 1000) * timing.fps);
+  return clampNum(idx, 0, Math.max(0, timing.frameCount - 1));
 }
 
 /**

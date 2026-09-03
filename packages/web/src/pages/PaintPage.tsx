@@ -622,7 +622,7 @@ export function PaintPage() {
         <DialogTitle>A scene is streaming</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            The Studio scene{streamStatus?.scene ? ` “${streamStatus.scene.name}”` : ''} is currently
+            The scene{streamStatus?.scene ? ` “${streamStatus.scene.name}”` : ''} is currently
             streaming. Painting here will stop that stream and take over the selected device.
           </DialogContentText>
         </DialogContent>

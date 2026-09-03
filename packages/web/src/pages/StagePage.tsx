@@ -59,7 +59,7 @@ function DmxPatchCard() {
       <CardContent>
         <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1}>
           <Box>
-            <Typography variant="h4">DMX / E1.31 patch</Typography>
+            <Typography variant="h4">DMX / E1.31 Device Patch</Typography>
             <Typography variant="body2" color="text.secondary">
               The app assigns each device a universe block and writes it to the controller.
               {patch.highestUniverse > 0 && ` Universes 1–${patch.highestUniverse} in use.`}
@@ -195,14 +195,7 @@ function StreamTestCard() {
     <Card>
       <CardContent>
         <Typography variant="h4" gutterBottom>
-          DDP transport test
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Streams to every device at 40 fps over DDP — the transport proof, end to end. <b>Solid</b>{' '}
-          checks that frames render (or use the per-device <b>Solid</b> button below to test one
-          strip); the <b>alignment pattern</b> (LED&nbsp;0 white, 1 red, 2 green, last blue, rest a
-          dim ramp) reveals a ±1 offset or a reversed run. Per-device transport and rate-cap
-          overrides are in the table.
+          DDP Settings &amp; Test
         </Typography>
 
         <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -228,14 +221,14 @@ function StreamTestCard() {
             startIcon={<PlayArrowIcon />}
             onClick={() => startSolid.mutate(hexToRgb(color))}
           >
-            {mode === 'solid' ? 'Streaming solid' : 'Stream solid'}
+            {mode === 'solid' ? 'Test All active' : 'Enable Test All'}
           </Button>
           <Button
             variant={mode === 'pattern' ? 'contained' : 'outlined'}
             startIcon={<PlayArrowIcon />}
             onClick={() => startPattern.mutate()}
           >
-            {mode === 'pattern' ? 'Streaming pattern' : 'Stream alignment pattern'}
+            {mode === 'pattern' ? 'Alignment Pattern active' : 'Enable Alignment Pattern'}
           </Button>
           {running && (
             <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={() => stopStream.mutate()}>
@@ -392,7 +385,7 @@ function StreamTestCard() {
 export function StagePage() {
   return (
     <Stack spacing={3}>
-      <Typography variant="h2">Stage</Typography>
+      <Typography variant="h2">System</Typography>
       <DmxPatchCard />
       <StreamTestCard />
     </Stack>
