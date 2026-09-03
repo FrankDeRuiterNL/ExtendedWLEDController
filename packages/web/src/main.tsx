@@ -10,6 +10,7 @@ import { DevicesPage } from './pages/DevicesPage.js';
 import { DeviceControlPage } from './pages/DeviceControlPage.js';
 import { StagePage } from './pages/StagePage.js';
 import { LayoutPage } from './pages/LayoutPage.js';
+import { HardwarePage } from './pages/HardwarePage.js';
 import { StudioPage } from './pages/StudioPage.js';
 import { PaintPage } from './pages/PaintPage.js';
 
@@ -26,6 +27,7 @@ const router = createBrowserRouter([
       { path: 'devices', element: <DevicesPage /> },
       { path: 'devices/:id', element: <DeviceControlPage /> },
       { path: 'layout', element: <LayoutPage /> },
+      { path: 'hardware', element: <HardwarePage /> },
       { path: 'studio', element: <StudioPage /> },
       { path: 'paint', element: <PaintPage /> },
       { path: 'stage', element: <StagePage /> },

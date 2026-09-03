@@ -109,12 +109,26 @@ export interface FloorplanRef {
   size: Vec2;
 }
 
+/**
+ * Physical hardware setup for one device's data output (one continuous strip).
+ * Used by the Hardware planning page to estimate power and injection points.
+ * Keyed by `deviceId` in {@link Installation.outputs}.
+ */
+export interface OutputHardware {
+  /** Id into `LED_TYPES` (see `@ewc/core` hardware/power). Unset = not planned yet. */
+  ledTypeId?: string;
+  /** Measured physical LED density (LEDs per metre); overrides the type's typical figure. */
+  ledsPerMeter?: number;
+}
+
 export interface Installation {
   fixtures: Fixture[];
   /** Canvas dimensions in arbitrary units; only the aspect ratio matters. */
   canvas: { width: number; height: number };
   /** Optional room floorplan shown behind the fixtures (preview-only). */
   floorplan?: FloorplanRef;
+  /** Per-output hardware planning, keyed by `deviceId`. Preview/planning only. */
+  outputs?: Record<string, OutputHardware>;
 }
 
 export const EMPTY_INSTALLATION: Installation = {

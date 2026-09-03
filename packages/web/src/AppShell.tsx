@@ -104,6 +104,7 @@ export function AppShell() {
               {[
                 { to: '/devices', label: 'Devices' },
                 { to: '/layout', label: 'Layout' },
+                { to: '/hardware', label: 'Hardware' },
                 { to: '/studio', label: 'Scenes' },
                 { to: '/paint', label: 'Paint' },
                 { to: '/stage', label: 'System' },
