@@ -43,7 +43,7 @@ export * from './api/pixelScenes.js';
  * on every milestone completion or otherwise significant change, and keep the
  * five workspace `package.json` versions in step with it.
  */
-export const APP_VERSION = '0.12.1';
+export const APP_VERSION = '0.12.2';
 
 /** @deprecated use {@link APP_VERSION} — kept so older callers keep compiling. */
 export const CORE_VERSION = APP_VERSION;
