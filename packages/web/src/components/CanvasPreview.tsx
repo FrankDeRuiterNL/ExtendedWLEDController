@@ -146,6 +146,9 @@ export function CanvasPreview({
     for (const [id, assetId] of want) {
       if (have.has(id)) continue;
       const el = document.createElement('video');
+      // Marker: these live off-DOM, so `document.querySelector('video')` finds
+      // only the inspector thumbnail — check `[data-ewc-sampler]` when debugging.
+      el.dataset.ewcSampler = id;
       el.src = mediaUrl(assetId);
       el.crossOrigin = 'anonymous';
       el.muted = true;
@@ -223,7 +226,10 @@ export function CanvasPreview({
           const vid = v.el;
           if (vid.readyState < 2 || !vid.videoWidth) continue;
           const media = s.scene.layers.find((l) => l.id === layerId)?.media;
-          const durationMs = media?.durationMs || vid.duration * 1000 || 0;
+          // Scenes saved before durationMs existed fall back to the element's
+          // own metadata (reliable here — readyState >= 2).
+          const durationMs =
+            media?.durationMs || (Number.isFinite(vid.duration) ? vid.duration * 1000 : 0);
           const pos = media
             ? resolveMediaPositionMs(media, durationMs, nowMs)
             : (nowMs / 1000) % (vid.duration || 1) * 1000;
