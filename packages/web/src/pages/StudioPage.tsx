@@ -1,0 +1,707 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Divider,
+  IconButton,
+  MenuItem,
+  Stack,
+  Switch,
+  TextField,
+  Tooltip,
+  Typography,
+} from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
+import SaveIcon from '@mui/icons-material/Save';
+import {
+  BLEND_MODES,
+  EMPTY_SCENE,
+  FULL_RECT,
+  effectDefaults,
+  getEffect,
+  listEffects,
+  makeLayer,
+  type BlendMode,
+  type Layer,
+  type LayerRect,
+  type Scene,
+} from '@ewc/core';
+import { CanvasPreview } from '../components/CanvasPreview.js';
+import { ParamControl, hexToRgb, rgbToHex } from '../components/ParamControl.js';
+import {
+  useCreateScene,
+  useDeleteScene,
+  useScene,
+  useScenes,
+  useStartScene,
+  useUpdateScene,
+} from '../api/scenes.js';
+import { useStopStream, useStreamStatus } from '../api/stage.js';
+import { useInstallation } from '../api/stage.js';
+import { useDevices } from '../api/devices.js';
+import { md3 } from '../theme/tokens.js';
+
+let seq = 0;
+const newLayerId = () => `l-${Date.now().toString(36)}-${seq++}`;
+
+const pct = (n: number) => Math.round(n * 100);
+const isFullRect = (r: LayerRect) => r.x <= 0 && r.y <= 0 && r.w >= 1 && r.h >= 1;
+
+function RectField({
+  label,
+  value,
+  onCommit,
+}: {
+  label: string;
+  value: number; // percent
+  onCommit: (pctValue: number) => void;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  const commit = () => {
+    const n = Number(text);
+    if (text.trim() === '' || !Number.isFinite(n)) {
+      setText(String(value)); // revert
+      return;
+    }
+    onCommit(n);
+  };
+  return (
+    <TextField
+      type="number"
+      size="small"
+      label={label}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+      InputProps={{ endAdornment: <Typography variant="caption" color="text.secondary">%</Typography> }}
+      sx={{ flex: 1 }}
+    />
+  );
+}
+
+function RegionEditor({ rect, onChange }: { rect: LayerRect; onChange: (r: LayerRect) => void }) {
+  const field = (key: keyof LayerRect, label: string) => (
+    <RectField
+      label={label}
+      value={pct(rect[key])}
+      onCommit={(v) => onChange({ ...rect, [key]: v / 100 })}
+    />
+  );
+  return (
+    <Stack spacing={1}>
+      <Stack direction="row" spacing={1}>
+        {field('x', 'Left')}
+        {field('y', 'Top')}
+      </Stack>
+      <Stack direction="row" spacing={1}>
+        {field('w', 'Width')}
+        {field('h', 'Height')}
+      </Stack>
+      <Button
+        size="small"
+        disabled={isFullRect(rect)}
+        onClick={() => onChange({ ...FULL_RECT })}
+      >
+        Fill canvas
+      </Button>
+      <Typography variant="caption" color="text.secondary">
+        The effect fills this box; LEDs outside it fall through to the layers below. Drag the box on
+        the preview to move it, corners to resize.
+      </Typography>
+    </Stack>
+  );
+}
+
+export function StudioPage() {
+  const { data: sceneList } = useScenes();
+  const { data: installation } = useInstallation();
+  const { data: devices } = useDevices();
+  const { data: stream } = useStreamStatus();
+  const create = useCreateScene();
+  const update = useUpdateScene();
+  const del = useDeleteScene();
+  const startScene = useStartScene();
+  const stopStream = useStopStream();
+
+  const [sceneId, setSceneId] = useState<number | null>(null);
+  /** Set only when the user explicitly picks a scene to load, so a save (which
+   *  also updates the cached scene) never clobbers the editor or drops live-sync. */
+  const [pendingLoad, setPendingLoad] = useState<number | null>(null);
+  const { data: loaded } = useScene(sceneId);
+  const [scene, setScene] = useState<Scene>(() => structuredClone(EMPTY_SCENE));
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  /** True once this editor's scene has been pushed to the stream — every later
+   *  edit then hot-swaps the live stream so the wall tracks the preview. */
+  const [liveSync, setLiveSync] = useState(false);
+
+  /** Pending scene switch awaiting confirmation (only shown while streaming). */
+  const [confirmLoad, setConfirmLoad] = useState<{ id: number | null } | null>(null);
+
+  const loadScene = (id: number | null) => {
+    setSceneId(id);
+    setPendingLoad(id);
+    if (id == null) {
+      setScene({ ...structuredClone(EMPTY_SCENE), name: 'New scene' });
+      setSelectedId(null);
+      setDirty(true);
+      setLiveSync(false);
+    }
+  };
+
+
+  useEffect(() => {
+    if (pendingLoad != null && loaded && loaded.id === pendingLoad) {
+      setScene(structuredClone(loaded.scene));
+      setDirty(false);
+      setLiveSync(false); // a freshly loaded scene isn't the one on the wire
+      setSelectedId(loaded.scene.layers[0]?.id ?? null);
+      setPendingLoad(null);
+    }
+  }, [loaded, pendingLoad]);
+
+  const patch = (next: Partial<Scene>) => {
+    setScene((s) => ({ ...s, ...next }));
+    setDirty(true);
+  };
+  const patchLayer = (id: string, p: Partial<Layer>) => {
+    setScene((s) => ({ ...s, layers: s.layers.map((l) => (l.id === id ? { ...l, ...p } : l)) }));
+    setDirty(true);
+  };
+  const move = (id: string, dir: -1 | 1) => {
+    setScene((s) => {
+      const i = s.layers.findIndex((l) => l.id === id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= s.layers.length) return s;
+      const layers = [...s.layers];
+      [layers[i], layers[j]] = [layers[j]!, layers[i]!];
+      return { ...s, layers };
+    });
+    setDirty(true);
+  };
+  const addLayer = (effectId: string) => {
+    const l = makeLayer(newLayerId(), effectId);
+    setScene((s) => ({ ...s, layers: [...s.layers, l] }));
+    setSelectedId(l.id);
+    setDirty(true);
+  };
+  const removeLayer = (id: string) => {
+    setScene((s) => ({ ...s, layers: s.layers.filter((l) => l.id !== id) }));
+    setSelectedId((cur) => (cur === id ? null : cur));
+    setDirty(true);
+  };
+
+  const selected = scene.layers.find((l) => l.id === selectedId) ?? null;
+  const selectedDef = selected ? getEffect(selected.effectId) : undefined;
+
+  const running = stream?.running ?? false;
+  const sceneRunning = running && stream?.mode === 'scene';
+  const streamingThis = sceneRunning && liveSync;
+
+  /** Switch scenes — but confirm first if a stream is running. */
+  const requestLoadScene = (id: number | null) => {
+    if (id === sceneId) return;
+    if (sceneRunning) setConfirmLoad({ id });
+    else loadScene(id);
+  };
+
+  /**
+   * Live-stream push queue. While `enabled`, every scene edit is pushed to the
+   * server (which hot-swaps the compositor). Coalesced + serialized: at most one
+   * push in flight, always carrying the newest scene. `stopSync()` disables it
+   * and drops any queued push; `inFlight` lets a stop wait out a push already on
+   * the wire so it can't resurrect the stream after `/stream/stop`.
+   */
+  const push = useRef<{ enabled: boolean; inFlight: boolean; pending: Scene | null }>({
+    enabled: false,
+    inFlight: false,
+    pending: null,
+  });
+  const drainPush = useRef<() => void>(() => {});
+  drainPush.current = () => {
+    const q = push.current;
+    if (q.inFlight || !q.pending) return;
+    q.inFlight = true;
+    const s = q.pending;
+    q.pending = null;
+    startScene
+      .mutateAsync({ scene: s })
+      .catch(() => {})
+      .finally(() => {
+        q.inFlight = false;
+        if (q.enabled && q.pending) drainPush.current();
+      });
+  };
+  const queuePush = (s: Scene) => {
+    push.current.pending = s;
+    drainPush.current();
+  };
+  const startSync = (s: Scene) => {
+    push.current.enabled = true;
+    queuePush(s);
+    setLiveSync(true);
+  };
+  const stopSync = () => {
+    push.current.enabled = false;
+    push.current.pending = null;
+    setLiveSync(false);
+  };
+
+  // Stream ended (or switched away from scene mode) elsewhere → drop live-sync.
+  useEffect(() => {
+    if (!sceneRunning) stopSync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sceneRunning]);
+
+  useEffect(() => {
+    if (!liveSync || !sceneRunning) return;
+    const id = setTimeout(() => queuePush(scene), 90);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene, liveSync, sceneRunning]);
+
+  const orphanFixtures = useMemo(() => {
+    if (!installation || !devices) return [];
+    const known = new Set(devices.map((d) => d.id));
+    return installation.fixtures.filter((f) => f.enabled && !known.has(f.deviceId)).map((f) => f.name);
+  }, [installation, devices]);
+
+  const save = () => {
+    if (sceneId != null) update.mutate({ id: sceneId, name: scene.name, scene }, { onSuccess: () => setDirty(false) });
+    else
+      create.mutate(
+        { name: scene.name, scene },
+        { onSuccess: (s) => { setSceneId(s.id); setDirty(false); } },
+      );
+  };
+
+
+  return (
+    <Stack spacing={3}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1}>
+        <Box>
+          <Typography variant="h2">Studio</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Stack effect layers on the shared canvas. Preview here, then stream it to the fixtures.
+          </Typography>
+        </Box>
+        <Stack direction="row" spacing={1} alignItems="center">
+          {!streamingThis && (
+            <Button
+              variant="contained"
+              startIcon={<PlayArrowIcon />}
+              disabled={scene.layers.length === 0}
+              onClick={() => startSync(scene)}
+            >
+              Stream this scene
+            </Button>
+          )}
+          {sceneRunning && (
+            <Button
+              variant="outlined"
+              color="error"
+              startIcon={<StopIcon />}
+              onClick={() => {
+                stopSync();
+                stopStream.mutate();
+              }}
+            >
+              Stop &amp; release
+            </Button>
+          )}
+          {streamingThis ? (
+            <Chip color="success" size="small" label="live · tracking preview" />
+          ) : (
+            sceneRunning && (
+              <Chip color="warning" size="small" variant="outlined" label={`streaming · ${stream?.scene?.name ?? ''}`} />
+            )
+          )}
+        </Stack>
+      </Stack>
+
+      {stream?.scene?.unknownEffects?.length ? (
+        <Alert severity="warning">
+          The running scene uses effects this build doesn&apos;t know: {stream.scene.unknownEffects.join(', ')}. Those
+          layers are skipped.
+        </Alert>
+      ) : null}
+
+      {orphanFixtures.length > 0 && (
+        <Alert severity="warning">
+          {orphanFixtures.length === 1 ? 'Fixture' : 'Fixtures'} <b>{orphanFixtures.join(', ')}</b> on the Layout point
+          at a device that no longer exists — those LEDs will stay dark. Fix the fixture on the Layout page.
+        </Alert>
+      )}
+
+      <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 360px' } }}>
+        {/* preview + scene management */}
+        <Stack spacing={2}>
+          <CanvasPreview
+            scene={scene}
+            installation={installation}
+            playing
+            editable
+            epochMs={streamingThis ? stream?.epochMs ?? null : null}
+            selectedLayerId={selectedId}
+            onSelectLayer={setSelectedId}
+            onLayerRect={(id, rect) => patchLayer(id, { rect })}
+          />
+          <Card>
+            <CardContent>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
+                <TextField
+                  size="small"
+                  label="Scene name"
+                  value={scene.name}
+                  onChange={(e) => patch({ name: e.target.value })}
+                  sx={{ flex: 1, minWidth: 180 }}
+                />
+                <Button startIcon={<SaveIcon />} variant="contained" disabled={!dirty} onClick={save}>
+                  {sceneId == null ? 'Save' : dirty ? 'Save' : 'Saved'}
+                </Button>
+                <Button onClick={() => requestLoadScene(null)}>New</Button>
+              </Stack>
+
+              <Divider sx={{ my: 1.5 }} />
+
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <TextField
+                  select
+                  size="small"
+                  label="Load scene"
+                  value={sceneId ?? ''}
+                  onChange={(e) => requestLoadScene(e.target.value === '' ? null : Number(e.target.value))}
+                  sx={{ flex: 1 }}
+                >
+                  <MenuItem value="">
+                    <em>Unsaved</em>
+                  </MenuItem>
+                  {(sceneList ?? []).map((s) => (
+                    <MenuItem key={s.id} value={s.id}>
+                      {s.name} · {s.layerCount} layer{s.layerCount === 1 ? '' : 's'}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                {sceneId != null && (
+                  <Tooltip title="Delete scene">
+                    <IconButton
+                      color="error"
+                      onClick={() => {
+                        del.mutate(sceneId);
+                        loadScene(null);
+                      }}
+                    >
+                      <DeleteOutlineIcon />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Stack>
+
+              <Divider sx={{ my: 1.5 }} />
+
+              <Stack direction="row" alignItems="center" justifyContent="space-between">
+                <Typography variant="body2">Background</Typography>
+                <Box
+                  component="label"
+                  sx={{
+                    width: 40, height: 28, borderRadius: 1, border: `1px solid ${md3.outline}`,
+                    overflow: 'hidden', cursor: 'pointer', bgcolor: rgbToHex(scene.background),
+                  }}
+                >
+                  <input
+                    type="color"
+                    value={rgbToHex(scene.background)}
+                    onChange={(e) => patch({ background: hexToRgb(e.target.value) })}
+                    style={{ opacity: 0, width: '100%', height: '100%', cursor: 'pointer' }}
+                  />
+                </Box>
+              </Stack>
+
+              {!installation?.fixtures.length && (
+                <Alert severity="info" sx={{ mt: 1.5 }}>
+                  No fixtures placed yet — add them on the <b>Layout</b> page or the stream will light nothing.
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
+        </Stack>
+
+        {/* layer stack + inspector */}
+        <Stack spacing={2}>
+          <Card>
+            <CardContent>
+              <Stack direction="row" alignItems="center" justifyContent="space-between">
+                <Typography variant="h4">Layers</Typography>
+                <Button size="small" startIcon={<AddIcon />} onClick={() => addLayer('solid')}>
+                  Add
+                </Button>
+              </Stack>
+
+              {scene.layers.length === 0 && (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  No layers. Add one to start — it&apos;s a plain solid you can change below.
+                </Typography>
+              )}
+
+              <Stack spacing={0.5} sx={{ mt: 1 }}>
+                {[...scene.layers].reverse().map((l) => {
+                  const def = getEffect(l.effectId);
+                  const isSel = l.id === selectedId;
+                  return (
+                    <Stack
+                      key={l.id}
+                      direction="row"
+                      alignItems="center"
+                      spacing={0.5}
+                      onClick={() => setSelectedId(l.id)}
+                      sx={{
+                        p: 0.5,
+                        borderRadius: 1,
+                        cursor: 'pointer',
+                        bgcolor: isSel ? `${md3.primary}14` : 'transparent',
+                        border: `1px solid ${isSel ? md3.primary : 'transparent'}`,
+                        opacity: l.enabled ? 1 : 0.5,
+                      }}
+                    >
+                      <Switch
+                        size="small"
+                        checked={l.enabled}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => patchLayer(l.id, { enabled: e.target.checked })}
+                      />
+                      <Typography variant="body2" sx={{ flex: 1 }} noWrap>
+                        {l.name?.trim() || def?.name || l.effectId}
+                        <Typography component="span" variant="caption" color="text.secondary">
+                          {` · ${pct(l.opacity)}%`}
+                          {l.blend !== 'normal' && ` · ${l.blend}`}
+                        </Typography>
+                      </Typography>
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); move(l.id, 1); }}>
+                        <ArrowUpwardIcon fontSize="inherit" />
+                      </IconButton>
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); move(l.id, -1); }}>
+                        <ArrowDownwardIcon fontSize="inherit" />
+                      </IconButton>
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); removeLayer(l.id); }}>
+                        <DeleteOutlineIcon fontSize="inherit" />
+                      </IconButton>
+                    </Stack>
+                  );
+                })}
+              </Stack>
+            </CardContent>
+          </Card>
+
+          {selected && selectedDef && (
+            <Card>
+              <CardContent>
+                <Stack spacing={1.5}>
+                  <TextField
+                    size="small"
+                    label="Layer name"
+                    placeholder={selectedDef.name}
+                    value={selected.name ?? ''}
+                    onChange={(e) => patchLayer(selected.id, { name: e.target.value })}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                  <TextField
+                    select
+                    size="small"
+                    label="Effect"
+                    value={selected.effectId}
+                    onChange={(e) =>
+                      patchLayer(selected.id, { effectId: e.target.value, params: effectDefaults(e.target.value) })
+                    }
+                  >
+                    {listEffects().map((e) => (
+                      <MenuItem key={e.id} value={e.id}>
+                        {e.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+
+                  <Stack direction="row" spacing={1}>
+                    <TextField
+                      select
+                      size="small"
+                      label="Blend"
+                      value={selected.blend}
+                      onChange={(e) => patchLayer(selected.id, { blend: e.target.value as BlendMode })}
+                      sx={{ flex: 1 }}
+                    >
+                      {BLEND_MODES.map((b) => (
+                        <MenuItem key={b.value} value={b.value}>
+                          {b.label}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                  </Stack>
+
+                  <Box>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2">Opacity</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {Math.round(selected.opacity * 100)}%
+                      </Typography>
+                    </Stack>
+                    <Box sx={{ px: 0.5 }}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={selected.opacity}
+                        onChange={(e) => patchLayer(selected.id, { opacity: Number(e.target.value) })}
+                        style={{ width: '100%' }}
+                      />
+                    </Box>
+                  </Box>
+
+                  <Divider>
+                    <Typography variant="caption" color="text.secondary">
+                      Canvas region
+                    </Typography>
+                  </Divider>
+                  <RegionEditor
+                    rect={selected.rect ?? FULL_RECT}
+                    onChange={(rect) => patchLayer(selected.id, { rect })}
+                  />
+
+                  <Divider>
+                    <Typography variant="caption" color="text.secondary">
+                      {selectedDef.name} settings
+                    </Typography>
+                  </Divider>
+
+                  {selectedDef.params.map((d) => (
+                    <ParamControl
+                      key={d.key}
+                      def={d}
+                      value={selected.params[d.key]}
+                      onChange={(v) => patchLayer(selected.id, { params: { ...selected.params, [d.key]: v } })}
+                    />
+                  ))}
+
+                  <Divider>
+                    <Typography variant="caption" color="text.secondary">
+                      Mask
+                    </Typography>
+                  </Divider>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between">
+                    <Typography variant="body2">Use an effect as a mask</Typography>
+                    <Switch
+                      size="small"
+                      checked={!!selected.mask}
+                      onChange={(e) =>
+                        patchLayer(selected.id, {
+                          mask: e.target.checked ? { effectId: 'gradient', params: effectDefaults('gradient') } : null,
+                        })
+                      }
+                    />
+                  </Stack>
+                  {selected.mask && (
+                    <>
+                      <TextField
+                        select
+                        size="small"
+                        label="Mask effect"
+                        value={selected.mask.effectId}
+                        onChange={(e) =>
+                          patchLayer(selected.id, {
+                            mask: { effectId: e.target.value, params: effectDefaults(e.target.value), invert: selected.mask?.invert },
+                          })
+                        }
+                      >
+                        {listEffects().map((e) => (
+                          <MenuItem key={e.id} value={e.id}>
+                            {e.name}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+                      <Stack direction="row" alignItems="center" justifyContent="space-between">
+                        <Typography variant="body2">Invert mask</Typography>
+                        <Switch
+                          size="small"
+                          checked={!!selected.mask.invert}
+                          onChange={(e) =>
+                            patchLayer(selected.id, { mask: { ...selected.mask!, invert: e.target.checked } })
+                          }
+                        />
+                      </Stack>
+                      {(getEffect(selected.mask.effectId)?.params ?? []).map((d) => (
+                        <ParamControl
+                          key={d.key}
+                          def={d}
+                          value={selected.mask!.params[d.key]}
+                          onChange={(v) =>
+                            patchLayer(selected.id, {
+                              mask: { ...selected.mask!, params: { ...selected.mask!.params, [d.key]: v } },
+                            })
+                          }
+                        />
+                      ))}
+                    </>
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
+          )}
+        </Stack>
+      </Box>
+
+      <Dialog open={!!confirmLoad} onClose={() => setConfirmLoad(null)}>
+        <DialogTitle>Stream output currently active</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Stream output currently active, sure you want to load a different scene? (This will stop
+            the current stream output for the active scene.)
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={stopStream.isPending} onClick={() => setConfirmLoad(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            disabled={stopStream.isPending}
+            onClick={async () => {
+              const target = confirmLoad?.id ?? null;
+              stopSync();
+              // Let any push already on the wire settle so it can't restart the
+              // stream after we stop it, then stop & release, then load.
+              for (let i = 0; i < 40 && push.current.inFlight; i++) {
+                await new Promise((r) => setTimeout(r, 40));
+              }
+              try {
+                await stopStream.mutateAsync();
+              } catch {
+                /* load anyway */
+              }
+              loadScene(target);
+              setConfirmLoad(null);
+            }}
+          >
+            {stopStream.isPending ? 'Stopping…' : 'Yes, I Understand'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Stack>
+  );
+}

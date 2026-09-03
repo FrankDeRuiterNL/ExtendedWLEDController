@@ -1,0 +1,26 @@
+node_modules/
+dist/
+build/
+release/
+coverage/
+*.tsbuildinfo
+
+# Runtime data (SQLite lives in a mounted volume in prod)
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+# Env / local overrides
+.env
+.env.*
+!.env.example
+*.local
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

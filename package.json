@@ -1,0 +1,33 @@
+{
+  "name": "extended-wled-controller",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Self-hosted control surface and effects engine for multiple WLED instances",
+  "author": "Frankvandetechniek.nl",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/server",
+    "packages/web",
+    "packages/sink"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @ewc/server",
+    "dev:web": "npm run dev -w @ewc/web",
+    "sink": "npm start -w @ewc/sink --",
+    "build": "npm run build -w @ewc/core && npm run build -w @ewc/server && npm run build -w @ewc/web",
+    "start": "node packages/server/dist/index.js",
+    "test": "npm run test -w @ewc/core",
+    "typecheck": "tsc -b --verbose",
+    "package": "node scripts/package-release.mjs --build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  }
+}

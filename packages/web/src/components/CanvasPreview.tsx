@@ -1,0 +1,285 @@
+import { useEffect, useRef } from 'react';
+import { Box } from '@mui/material';
+import {
+  FULL_RECT,
+  mapFixture,
+  mapInstallation,
+  sampleScene,
+  type Installation,
+  type LayerRect,
+  type Scene,
+} from '@ewc/core';
+import { md3 } from '../theme/tokens.js';
+
+interface Props {
+  scene: Scene;
+  installation?: Installation | null;
+  playing?: boolean;
+  showFixtures?: boolean;
+  resolution?: number;
+  /** Enable the layer-region overlay (drag to move, corners to resize). */
+  editable?: boolean;
+  selectedLayerId?: string | null;
+  onSelectLayer?: (id: string | null) => void;
+  onLayerRect?: (id: string, rect: LayerRect) => void;
+  /** Wall-clock ms to seed the animation clock from (the live stream's origin),
+   *  so the preview stays phase-locked to the wire. Omit to free-run from mount. */
+  epochMs?: number | null;
+}
+
+type Corner = 'nw' | 'ne' | 'sw' | 'se';
+
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+function resizeRect(r: LayerRect, corner: Corner, dx: number, dy: number): LayerRect {
+  let { x, y, w, h } = r;
+  const MIN = 0.03;
+  if (corner === 'nw' || corner === 'sw') {
+    const nx = clamp(x + dx, -0.5, x + w - MIN);
+    w += x - nx;
+    x = nx;
+  }
+  if (corner === 'ne' || corner === 'se') w = clamp(w + dx, MIN, 2.5);
+  if (corner === 'nw' || corner === 'ne') {
+    const ny = clamp(y + dy, -0.5, y + h - MIN);
+    h += y - ny;
+    y = ny;
+  }
+  if (corner === 'sw' || corner === 'se') h = clamp(h + dy, MIN, 2.5);
+  return { x, y, w, h };
+}
+
+/**
+ * Renders a {@link Scene} with the **same `sampleScene`** the DDP loop uses. When
+ * `editable`, overlays a draggable / resizable box per layer so effects can be
+ * scaled and positioned on parts of the canvas.
+ */
+export function CanvasPreview({
+  scene,
+  installation,
+  playing = true,
+  showFixtures = true,
+  resolution = 200,
+  editable = false,
+  selectedLayerId = null,
+  onSelectLayer,
+  onLayerRect,
+  epochMs = null,
+}: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const state = useRef({ scene, installation, playing, showFixtures, epochMs });
+  state.current = { scene, installation, playing, showFixtures, epochMs };
+  const drag = useRef<
+    | { id: string; mode: 'move' | Corner; startRect: LayerRect; px: number; py: number }
+    | null
+  >(null);
+
+  const aspect =
+    installation && installation.canvas.height > 0
+      ? installation.canvas.width / installation.canvas.height
+      : 16 / 9;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const w = Math.max(16, Math.round(resolution));
+    const h = Math.max(9, Math.round(w / aspect));
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = ctx.createImageData(w, h);
+
+    let raf = 0;
+    let start = performance.now();
+    let stoppedAt = 0;
+
+    const frame = (now: number) => {
+      const s = state.current;
+      if (!s.playing) {
+        if (!stoppedAt) stoppedAt = now;
+      } else if (stoppedAt) {
+        start += now - stoppedAt;
+        stoppedAt = 0;
+      }
+      // Phase-lock to the live stream when its clock origin is known; otherwise
+      // free-run from mount.
+      const t = !s.playing
+        ? 0
+        : s.epochMs != null
+          ? (Date.now() - s.epochMs) / 1000
+          : (now - start) / 1000;
+
+      const data = img.data;
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t);
+          const o = (py * w + px) * 4;
+          data[o] = c[0];
+          data[o + 1] = c[1];
+          data[o + 2] = c[2];
+          data[o + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+
+      if (s.showFixtures && s.installation) {
+        for (const led of mapInstallation(s.installation)) {
+          ctx.fillStyle = 'rgba(255,255,255,0.30)';
+          ctx.fillRect(led.x * w - 0.6, led.y * h - 0.6, 1.6, 1.6);
+        }
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [aspect, resolution]);
+
+  const onPointerDown = (
+    e: React.PointerEvent,
+    id: string,
+    mode: 'move' | Corner,
+    rect: LayerRect,
+  ) => {
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    onSelectLayer?.(id);
+    drag.current = { id, mode, startRect: rect, px: e.clientX, py: e.clientY };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    const el = overlayRef.current;
+    if (!d || !el || !onLayerRect) return;
+    const box = el.getBoundingClientRect();
+    const dx = (e.clientX - d.px) / box.width;
+    const dy = (e.clientY - d.py) / box.height;
+    if (d.mode === 'move') {
+      onLayerRect(d.id, {
+        ...d.startRect,
+        x: clamp(d.startRect.x + dx, -0.5, 1.5 - d.startRect.w),
+        y: clamp(d.startRect.y + dy, -0.5, 1.5 - d.startRect.h),
+      });
+    } else {
+      onLayerRect(d.id, resizeRect(d.startRect, d.mode, dx, dy));
+    }
+  };
+
+  const endDrag = () => {
+    drag.current = null;
+  };
+
+  return (
+    <Box
+      sx={{
+        position: 'relative',
+        width: '100%',
+        aspectRatio: String(aspect),
+        borderRadius: 2,
+        overflow: 'hidden',
+        border: `1px solid ${md3.outlineVariant}`,
+        bgcolor: '#000',
+      }}
+    >
+      <Box
+        component="canvas"
+        ref={canvasRef}
+        sx={{ width: '100%', height: '100%', display: 'block' }}
+      />
+
+      {showFixtures && installation && installation.fixtures.length > 0 && (
+        <Box sx={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+          {installation.fixtures.map((f) => {
+            if (!f.enabled) return null;
+            const leds = mapFixture(f, installation.canvas);
+            if (leds.length === 0) return null;
+            let minX = 1;
+            let maxX = 0;
+            let maxY = 0;
+            for (const p of leds) {
+              if (p.x < minX) minX = p.x;
+              if (p.x > maxX) maxX = p.x;
+              if (p.y > maxY) maxY = p.y;
+            }
+            return (
+              <Box
+                key={f.id}
+                sx={{
+                  position: 'absolute',
+                  left: `${((minX + maxX) / 2) * 100}%`,
+                  top: `${maxY * 100}%`,
+                  transform: 'translate(-50%, 3px)',
+                  fontSize: 9,
+                  lineHeight: 1,
+                  fontWeight: 600,
+                  color: '#fff',
+                  textShadow: '0 0 3px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.95)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {f.name}
+              </Box>
+            );
+          })}
+        </Box>
+      )}
+
+      {editable && (
+        <Box
+          ref={overlayRef}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerLeave={endDrag}
+          onPointerDown={() => onSelectLayer?.(null)}
+          sx={{ position: 'absolute', inset: 0, touchAction: 'none' }}
+        >
+          {scene.layers.map((l) => {
+            if (!l.enabled) return null;
+            const r = l.rect ?? FULL_RECT;
+            const sel = l.id === selectedLayerId;
+            const isFull = r.x <= 0 && r.y <= 0 && r.w >= 1 && r.h >= 1;
+            if (isFull && !sel) return null; // don't clutter with full-canvas outlines
+            return (
+              <Box
+                key={l.id}
+                onPointerDown={(e) => onPointerDown(e, l.id, 'move', r)}
+                sx={{
+                  position: 'absolute',
+                  left: `${r.x * 100}%`,
+                  top: `${r.y * 100}%`,
+                  width: `${r.w * 100}%`,
+                  height: `${r.h * 100}%`,
+                  border: `1.5px ${sel ? 'solid' : 'dashed'} ${sel ? md3.primary : 'rgba(255,255,255,0.5)'}`,
+                  boxShadow: sel ? `0 0 0 1px rgba(0,0,0,0.6)` : 'none',
+                  cursor: sel ? 'move' : 'pointer',
+                }}
+              >
+                {sel &&
+                  (['nw', 'ne', 'sw', 'se'] as Corner[]).map((c) => (
+                    <Box
+                      key={c}
+                      onPointerDown={(e) => onPointerDown(e, l.id, c, r)}
+                      sx={{
+                        position: 'absolute',
+                        width: 12,
+                        height: 12,
+                        bgcolor: md3.primary,
+                        border: '1px solid #000',
+                        borderRadius: '2px',
+                        top: c[0] === 'n' ? -6 : undefined,
+                        bottom: c[0] === 's' ? -6 : undefined,
+                        left: c[1] === 'w' ? -6 : undefined,
+                        right: c[1] === 'e' ? -6 : undefined,
+                        cursor: `${c}-resize`,
+                      }}
+                    />
+                  ))}
+              </Box>
+            );
+          })}
+        </Box>
+      )}
+    </Box>
+  );
+}

@@ -1,0 +1,27 @@
+services:
+  extended-wled-controller:
+    build: .
+    image: extended-wled-controller:latest
+    container_name: extended-wled-controller
+    restart: unless-stopped
+    # Bridge networking with an explicit port map — works the same on Linux,
+    # macOS and Docker Desktop for Windows. All device traffic (WLED HTTP/JSON,
+    # the per-device WebSocket, and DDP realtime over UDP/4048) is *outbound*
+    # from the container, so bridge NAT is enough; nothing connects back in.
+    ports:
+      - "8080:8080"
+    environment:
+      EWC_PORT: "8080"
+      EWC_DATA_DIR: /data
+      # EWC_LOG_LEVEL: info
+      # EWC_WLED_BULK_RETRIES: "15"   # /json/fxdata truncation retries
+    volumes:
+      - ewc-data:/data
+    # --- Linux host alternative -------------------------------------------
+    # On a Linux host you can instead run with host networking (drop `ports:`
+    # above and uncomment below) if you want mDNS / broadcast discovery to see
+    # the same subnet as the host:
+    #   network_mode: host
+
+volumes:
+  ewc-data:

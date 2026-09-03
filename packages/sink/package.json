@@ -1,0 +1,23 @@
+{
+  "name": "@ewc/sink",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Software WLED sink — a fake device that speaks DDP + the JSON API + WebSocket, for testing without hardware.",
+  "bin": {
+    "ewc-sink": "./src/sink.ts"
+  },
+  "scripts": {
+    "start": "tsx --conditions development src/sink.ts",
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@ewc/core": "*",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.2"
+  }
+}

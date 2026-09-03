@@ -1,0 +1,30 @@
+# Everything that must be rebuilt inside the image or is host-specific.
+# better-sqlite3 is a native module: a node_modules built on Windows will not
+# load in the Linux container, so node_modules is never copied in.
+**/node_modules
+**/dist
+**/build
+**/coverage
+**/*.tsbuildinfo
+
+.git
+.gitignore
+.github
+
+data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+.env
+.env.*
+*.local
+
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Docs / research not needed at runtime
+docs/research
