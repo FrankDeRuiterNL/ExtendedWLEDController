@@ -7,6 +7,11 @@ import {
   CardContent,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   FormControlLabel,
   IconButton,
@@ -66,6 +71,7 @@ export function DeviceControlPage() {
   const segments = state.seg?.filter((s) => (s.stop ?? 0) > (s.start ?? 0) || s.id === state.mainseg) ?? [];
   const [segId, setSegId] = useState<number | null>(null);
   const [nodeImportOpen, setNodeImportOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const activeSegId = segId ?? state.mainseg ?? segments[0]?.id ?? 0;
   const segment: WledSegment = segments.find((s) => s.id === activeSegId) ?? { id: activeSegId };
 
@@ -387,18 +393,50 @@ export function DeviceControlPage() {
                 color="error"
                 variant="outlined"
                 startIcon={<DeleteOutlineIcon />}
-                onClick={() => {
-                  if (confirm(`Remove "${device.name}"? This only removes it from this controller.`)) {
-                    del.mutate(device.id, { onSuccess: () => navigate('/devices') });
-                  }
-                }}
+                disabled={del.isPending}
+                onClick={() => setConfirmDelete(true)}
               >
                 Remove device
               </Button>
             </Stack>
+
+            {del.isError && (
+              <Alert severity="error" onClose={() => del.reset()}>
+                {(del.error as Error)?.message ?? 'Could not remove the device.'}
+              </Alert>
+            )}
           </Stack>
         </CardContent>
       </Card>
+
+      <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)}>
+        <DialogTitle>Remove “{device.name}”?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This removes the device from Extended WLED Controller only — its own settings and presets
+            on the controller are untouched. Fixtures mapped to it stay on the layout but stop
+            receiving output.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button color="inherit" onClick={() => setConfirmDelete(false)}>
+            Cancel
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            disabled={del.isPending}
+            onClick={() =>
+              del.mutate(device.id, {
+                onSuccess: () => navigate('/devices'),
+                onSettled: () => setConfirmDelete(false),
+              })
+            }
+          >
+            {del.isPending ? 'Removing…' : 'Remove'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Typography variant="caption" color="text.secondary" sx={{ color: md3.onSurfaceVariant }}>
         DMX start address {device.dmxStartAddress} · universe {device.realtime.dmxUniverse ?? '—'} · realtime
