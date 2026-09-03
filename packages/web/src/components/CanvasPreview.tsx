@@ -9,6 +9,7 @@ import {
   type LayerRect,
   type Scene,
 } from '@ewc/core';
+import { floorplanUrl } from '../api/stage.js';
 import { md3 } from '../theme/tokens.js';
 
 interface Props {
@@ -16,6 +17,8 @@ interface Props {
   installation?: Installation | null;
   playing?: boolean;
   showFixtures?: boolean;
+  /** Overlay the installation's floorplan image (preview-only, 50% opacity). */
+  showFloorplan?: boolean;
   resolution?: number;
   /** Enable the layer-region overlay (drag to move, corners to resize). */
   editable?: boolean;
@@ -59,6 +62,7 @@ export function CanvasPreview({
   installation,
   playing = true,
   showFixtures = true,
+  showFloorplan = false,
   resolution = 200,
   editable = false,
   selectedLayerId = null,
@@ -187,6 +191,28 @@ export function CanvasPreview({
         ref={canvasRef}
         sx={{ width: '100%', height: '100%', display: 'block' }}
       />
+
+      {showFloorplan && installation?.floorplan && (() => {
+        const fp = installation.floorplan;
+        const { width: cw, height: ch } = installation.canvas;
+        return (
+          <Box
+            component="img"
+            src={floorplanUrl(fp)}
+            alt=""
+            sx={{
+              position: 'absolute',
+              left: `${((fp.position.x - fp.size.x / 2) / cw) * 100}%`,
+              top: `${((fp.position.y - fp.size.y / 2) / ch) * 100}%`,
+              width: `${(fp.size.x / cw) * 100}%`,
+              height: `${(fp.size.y / ch) * 100}%`,
+              opacity: 0.5,
+              objectFit: 'fill',
+              pointerEvents: 'none',
+            }}
+          />
+        );
+      })()}
 
       {showFixtures && installation && installation.fixtures.length > 0 && (
         <Box sx={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>

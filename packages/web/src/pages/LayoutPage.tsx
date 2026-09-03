@@ -14,6 +14,7 @@ import {
   MenuItem,
   Slider,
   Stack,
+  Switch,
   TextField,
   Typography,
 } from '@mui/material';
@@ -27,11 +28,18 @@ import {
   type Fixture,
   type FixtureGeometry,
   type FixtureShape,
+  type FloorplanRef,
   type Installation,
   type ShapeKind,
   type Vec2,
 } from '@ewc/core';
-import { useInstallation, useSaveInstallation } from '../api/stage.js';
+import {
+  floorplanUrl,
+  useDeleteFloorplan,
+  useInstallation,
+  useSaveInstallation,
+  useUploadFloorplan,
+} from '../api/stage.js';
 import { useDevices } from '../api/devices.js';
 import { md3 } from '../theme/tokens.js';
 
@@ -134,6 +142,8 @@ function AddFixtureDialog({
 export function LayoutPage() {
   const { data: saved } = useInstallation();
   const save = useSaveInstallation();
+  const upload = useUploadFloorplan();
+  const removeFp = useDeleteFloorplan();
   const { data: devices } = useDevices();
 
   const [inst, setInst] = useState<Installation | null>(null);
@@ -148,7 +158,26 @@ export function LayoutPage() {
     | { id: string; rotationDeg: number; center: Vec2; lockAspect: boolean }
     | null
   >(null);
+  const fpDrag = useRef<{ dx: number; dy: number } | null>(null);
+  const fpResize = useRef<{ center: Vec2; aspect: number } | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const drawActions = useRef({ commit: () => {}, cancel: () => {} });
+
+  const [showFloorplan, setShowFloorplan] = useState(() => {
+    try {
+      return localStorage.getItem('ewc.layout.showFloorplan') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const toggleFloorplan = (on: boolean) => {
+    setShowFloorplan(on);
+    try {
+      localStorage.setItem('ewc.layout.showFloorplan', on ? '1' : '0');
+    } catch {
+      /* private mode — no persistence */
+    }
+  };
 
   useEffect(() => {
     if (saved && !dirty && !draw) setInst(saved);
@@ -294,7 +323,65 @@ export function LayoutPage() {
     };
   };
 
+  const updateFloorplan = (patch: Partial<FloorplanRef>) => {
+    if (!inst.floorplan) return;
+    update({ ...inst, floorplan: { ...inst.floorplan, ...patch } });
+  };
+
+  const doUpload = (file: File) =>
+    upload.mutate(file, {
+      onSuccess: (i) => setInst((cur) => (cur ? { ...cur, floorplan: i.floorplan } : i)),
+    });
+  const doRemoveFloorplan = () =>
+    removeFp.mutate(undefined, {
+      onSuccess: () =>
+        setInst((cur) => {
+          if (!cur) return cur;
+          const next = { ...cur };
+          delete next.floorplan;
+          return next;
+        }),
+    });
+
+  const onFloorplanPointerDown = (evt: React.PointerEvent) => {
+    if (draw || !inst.floorplan) return;
+    evt.stopPropagation();
+    (evt.target as Element).setPointerCapture(evt.pointerId);
+    setSelectedId(null);
+    const p = toCanvas(evt);
+    fpDrag.current = { dx: inst.floorplan.position.x - p.x, dy: inst.floorplan.position.y - p.y };
+  };
+  const onFloorplanResizeDown = (evt: React.PointerEvent) => {
+    if (!inst.floorplan) return;
+    evt.stopPropagation();
+    (evt.target as Element).setPointerCapture(evt.pointerId);
+    setSelectedId(null);
+    fpResize.current = {
+      center: { ...inst.floorplan.position },
+      aspect: inst.floorplan.naturalWidth / inst.floorplan.naturalHeight || 1,
+    };
+  };
+
   const onPointerMove = (evt: React.PointerEvent) => {
+    if (fpResize.current && inst.floorplan) {
+      const r = fpResize.current;
+      const p = toCanvas(evt);
+      // Symmetric about centre; keep the image's natural aspect ratio.
+      const half = Math.max(Math.abs(p.x - r.center.x), Math.abs(p.y - r.center.y) * r.aspect);
+      const w = clamp(half * 2, 0.5, inst.canvas.width * 3);
+      updateFloorplan({ size: { x: round(w), y: round(w / r.aspect) } });
+      return;
+    }
+    if (fpDrag.current && inst.floorplan) {
+      const p = toCanvas(evt);
+      updateFloorplan({
+        position: {
+          x: clamp(p.x + fpDrag.current.dx, 0, inst.canvas.width),
+          y: clamp(p.y + fpDrag.current.dy, 0, inst.canvas.height),
+        },
+      });
+      return;
+    }
     if (resize.current) {
       const r = resize.current;
       const p = toCanvas(evt);
@@ -319,6 +406,8 @@ export function LayoutPage() {
   const onPointerUp = () => {
     drag.current = null;
     resize.current = null;
+    fpDrag.current = null;
+    fpResize.current = null;
   };
 
   const addDrawVertex = (clientX: number, clientY: number) => {
@@ -428,7 +517,64 @@ export function LayoutPage() {
                   <path d="M1 0 L0 0 0 1" fill="none" stroke={md3.outlineVariant} strokeWidth="0.02" />
                 </pattern>
               </defs>
-              <rect x={0} y={0} width={inst.canvas.width} height={inst.canvas.height} fill="url(#grid)" />
+
+              {showFloorplan && inst.floorplan && (
+                <image
+                  href={floorplanUrl(inst.floorplan)}
+                  x={inst.floorplan.position.x - inst.floorplan.size.x / 2}
+                  y={inst.floorplan.position.y - inst.floorplan.size.y / 2}
+                  width={inst.floorplan.size.x}
+                  height={inst.floorplan.size.y}
+                  opacity={0.5}
+                  preserveAspectRatio="none"
+                  style={{ cursor: !selectedId && !draw ? 'grab' : 'default' }}
+                  onPointerDown={!selectedId && !draw ? onFloorplanPointerDown : undefined}
+                />
+              )}
+
+              <rect
+                x={0}
+                y={0}
+                width={inst.canvas.width}
+                height={inst.canvas.height}
+                fill="url(#grid)"
+                pointerEvents="none"
+              />
+
+              {showFloorplan && inst.floorplan && !selectedId && !draw && (() => {
+                const fp = inst.floorplan;
+                const hs = Math.max(0.5, Math.min(inst.canvas.width, inst.canvas.height) * 0.028);
+                return (
+                  <g>
+                    <rect
+                      x={fp.position.x - fp.size.x / 2}
+                      y={fp.position.y - fp.size.y / 2}
+                      width={fp.size.x}
+                      height={fp.size.y}
+                      fill="none"
+                      stroke={md3.outline}
+                      strokeWidth={0.03}
+                      strokeDasharray="0.22 0.16"
+                      pointerEvents="none"
+                    />
+                    {([[-1, -1], [1, -1], [1, 1], [-1, 1]] as const).map(([sx, sy]) => (
+                      <rect
+                        key={`${sx}${sy}`}
+                        x={fp.position.x + (sx * fp.size.x) / 2 - hs / 2}
+                        y={fp.position.y + (sy * fp.size.y) / 2 - hs / 2}
+                        width={hs}
+                        height={hs}
+                        rx={hs * 0.25}
+                        fill={md3.primary}
+                        stroke={md3.surfaceContainerLowest}
+                        strokeWidth={hs * 0.12}
+                        style={{ cursor: 'nwse-resize' }}
+                        onPointerDown={onFloorplanResizeDown}
+                      />
+                    ))}
+                  </g>
+                );
+              })()}
 
               {inst.fixtures.map((f) => {
                 const leds = mapFixture(f, inst.canvas);
@@ -546,6 +692,17 @@ export function LayoutPage() {
                 );
               })()}
             </Box>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1, pt: 0.5 }}>
+              <Switch
+                size="small"
+                checked={showFloorplan && !!inst.floorplan}
+                disabled={!inst.floorplan}
+                onChange={(e) => toggleFloorplan(e.target.checked)}
+              />
+              <Typography variant="body2" color="text.secondary">
+                Show floorplan
+              </Typography>
+            </Stack>
           </CardContent>
         </Card>
 
@@ -690,6 +847,51 @@ export function LayoutPage() {
                 onChange={(e) => update({ ...inst, canvas: { ...inst.canvas, height: Math.max(1, Number(e.target.value)) } })}
               />
             </Stack>
+
+            {!selected && (
+              <>
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="subtitle2" gutterBottom>
+                  Floorplan
+                </Typography>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) doUpload(f);
+                    e.target.value = '';
+                  }}
+                />
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => fileInput.current?.click()}
+                    disabled={upload.isPending}
+                  >
+                    {upload.isPending ? 'Uploading…' : inst.floorplan ? 'Replace image' : 'Upload image'}
+                  </Button>
+                  {inst.floorplan && (
+                    <Button size="small" color="error" onClick={doRemoveFloorplan} disabled={removeFp.isPending}>
+                      Remove
+                    </Button>
+                  )}
+                </Stack>
+                {upload.isError && (
+                  <Alert severity="error" sx={{ mt: 1 }}>
+                    {(upload.error as Error).message}
+                  </Alert>
+                )}
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  A room plan to place fixtures against — shown at 50% opacity below the grid. With no
+                  fixture selected, drag it to move and use the corners to scale. Preview only; never
+                  sent to the LEDs.
+                </Typography>
+              </>
+            )}
           </CardContent>
         </Card>
       </Box>

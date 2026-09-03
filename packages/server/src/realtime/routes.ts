@@ -1,6 +1,7 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { z } from 'zod';
 import type { DmxService } from '../dmx/service.js';
+import { FLOORPLAN_MIME_TYPES, type FloorplanStore } from '../installation/floorplanStore.js';
 import type { InstallationStore } from '../installation/store.js';
 import { SceneStore, sceneSchema } from '../render/sceneStore.js';
 import type { StreamService } from './streamService.js';
@@ -166,7 +167,27 @@ export function streamRoutes(stream: StreamService, scenes: SceneStore): Router 
   return r;
 }
 
-export function installationRoutes(store: InstallationStore, onChange?: () => void): Router {
+/** Fit a `w`×`h` image fully inside the canvas, keeping its aspect ratio. */
+export function fitToCanvas(
+  w: number,
+  h: number,
+  canvas: { width: number; height: number },
+): { position: { x: number; y: number }; size: { x: number; y: number } } {
+  const ar = w > 0 && h > 0 ? w / h : 1;
+  let sx = canvas.width;
+  let sy = canvas.width / ar;
+  if (sy > canvas.height) {
+    sy = canvas.height;
+    sx = canvas.height * ar;
+  }
+  return { position: { x: canvas.width / 2, y: canvas.height / 2 }, size: { x: sx, y: sy } };
+}
+
+export function installationRoutes(
+  store: InstallationStore,
+  floorplans: FloorplanStore,
+  onChange?: () => void,
+): Router {
   const r = Router();
   r.get('/', (_req, res) => res.json({ installation: store.get() }));
   r.put('/', (req, res, next) => {
@@ -178,6 +199,71 @@ export function installationRoutes(store: InstallationStore, onChange?: () => vo
       next(err);
     }
   });
+
+  // --- floorplan reference image (preview-only, never reaches the wire) ------
+
+  r.get('/floorplan', (_req, res) => {
+    const fp = store.get().floorplan;
+    if (!fp) return res.status(404).json({ error: { code: 'not-found', message: 'no floorplan' } });
+    res.type(floorplans.mimeFor(fp.asset));
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return res.sendFile(floorplans.path(fp.asset), (err) => {
+      if (err && !res.headersSent) res.status(404).end();
+    });
+  });
+
+  r.put(
+    '/floorplan',
+    express.raw({ type: FLOORPLAN_MIME_TYPES, limit: '16mb' }),
+    (req, res, next) => {
+      try {
+        const bytes = req.body;
+        if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
+          return res.status(400).json({ error: { code: 'empty', message: 'no image body' } });
+        }
+        const mime = (req.headers['content-type'] ?? '').split(';')[0]!.trim();
+        const dims = z
+          .object({ w: z.coerce.number().positive(), h: z.coerce.number().positive() })
+          .parse(req.query);
+
+        const asset = floorplans.write(bytes, mime);
+        const current = store.get();
+        const prev = current.floorplan;
+        // Keep an existing placement, but re-derive the box height from the new
+        // image's aspect (anchored on the kept width) so `size` and `natural*`
+        // can never disagree — both renderers force the box and the resize
+        // handle reads the aspect from `natural*`. First upload: fit to canvas.
+        const aspect = dims.w / dims.h;
+        const placement =
+          prev && prev.position && prev.size
+            ? { position: prev.position, size: { x: prev.size.x, y: prev.size.x / aspect } }
+            : fitToCanvas(dims.w, dims.h, current.canvas);
+        const installation = store.setFloorplan({
+          asset,
+          rev: (prev?.rev ?? 0) + 1,
+          naturalWidth: dims.w,
+          naturalHeight: dims.h,
+          ...placement,
+        });
+        onChange?.();
+        return res.json({ installation });
+      } catch (err) {
+        return next(err);
+      }
+    },
+  );
+
+  r.delete('/floorplan', (_req, res, next) => {
+    try {
+      floorplans.clear();
+      const installation = store.setFloorplan(null);
+      onChange?.();
+      res.json({ installation });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   return r;
 }
 

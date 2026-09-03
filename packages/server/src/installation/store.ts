@@ -42,9 +42,19 @@ const fixture = z.object({
   enabled: z.boolean(),
 });
 
+const floorplan = z.object({
+  asset: z.string().min(1).max(200),
+  rev: z.number().int().min(0),
+  naturalWidth: z.number().positive(),
+  naturalHeight: z.number().positive(),
+  position: vec2,
+  size: vec2,
+});
+
 export const installationSchema = z.object({
   fixtures: z.array(fixture).max(512),
   canvas: z.object({ width: z.number().positive(), height: z.number().positive() }),
+  floorplan: floorplan.optional(),
 });
 
 export class InstallationStore {
@@ -68,5 +78,14 @@ export class InstallationStore {
       .prepare(`UPDATE installation SET data_json = ?, updated_at = datetime('now') WHERE id = 1`)
       .run(JSON.stringify(inst));
     return inst;
+  }
+
+  /** Merge (or clear, with `null`) just the floorplan reference and persist. */
+  setFloorplan(ref: Installation['floorplan'] | null): Installation {
+    const current = this.get();
+    const next: Installation = { ...current };
+    if (ref) next.floorplan = ref;
+    else delete next.floorplan;
+    return this.save(next);
   }
 }

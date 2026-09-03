@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tan
 import type {
   DmxPatchDTO,
   DmxPlanConfig,
+  FloorplanRef,
   Installation,
 } from '@ewc/core';
 import { api } from './client.js';
@@ -154,6 +155,58 @@ export function useSaveInstallation() {
   return useMutation({
     mutationFn: (installation: Installation) =>
       api.put<{ installation: Installation }>('/installation', { installation }).then((r) => r.installation),
+    onSuccess: (inst) => qc.setQueryData(instKey, inst),
+  });
+}
+
+// --- floorplan (preview-only reference image) ----------------------
+
+/** URL for the stored floorplan image, cache-busted by its `rev`. */
+export const floorplanUrl = (fp: FloorplanRef): string =>
+  `/api/installation/floorplan?rev=${fp.rev}`;
+
+/** Read an image file's natural pixel dimensions in the browser. */
+async function imageDimensions(file: File): Promise<{ w: number; h: number }> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('could not read image'));
+      img.src = url;
+    });
+    return { w: img.naturalWidth || 1, h: img.naturalHeight || 1 };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+export function useUploadFloorplan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File): Promise<Installation> => {
+      const { w, h } = await imageDimensions(file);
+      const res = await fetch(`/api/installation/floorplan?w=${w}&h=${h}`, {
+        method: 'PUT',
+        headers: { 'content-type': file.type },
+        body: file,
+      });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : undefined;
+      if (!res.ok) {
+        throw new Error(data?.error?.message ?? `upload failed (HTTP ${res.status})`);
+      }
+      return data.installation as Installation;
+    },
+    onSuccess: (inst) => qc.setQueryData(instKey, inst),
+  });
+}
+
+export function useDeleteFloorplan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.delete<{ installation: Installation }>('/installation/floorplan').then((r) => r.installation),
     onSuccess: (inst) => qc.setQueryData(instKey, inst),
   });
 }

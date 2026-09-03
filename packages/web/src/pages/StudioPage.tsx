@@ -151,6 +151,23 @@ export function StudioPage() {
    *  edit then hot-swaps the live stream so the wall tracks the preview. */
   const [liveSync, setLiveSync] = useState(false);
 
+  /** Floorplan overlay on the preview — independent of the Layout page's toggle. */
+  const [showFloorplan, setShowFloorplan] = useState(() => {
+    try {
+      return localStorage.getItem('ewc.studio.showFloorplan') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleFloorplan = (on: boolean) => {
+    setShowFloorplan(on);
+    try {
+      localStorage.setItem('ewc.studio.showFloorplan', on ? '1' : '0');
+    } catch {
+      /* private mode — no persistence */
+    }
+  };
+
   /** Pending scene switch awaiting confirmation (only shown while streaming). */
   const [confirmLoad, setConfirmLoad] = useState<{ id: number | null } | null>(null);
 
@@ -357,11 +374,24 @@ export function StudioPage() {
             installation={installation}
             playing
             editable
+            showFloorplan={showFloorplan}
             epochMs={streamingThis ? stream?.epochMs ?? null : null}
             selectedLayerId={selectedId}
             onSelectLayer={setSelectedId}
             onLayerRect={(id, rect) => patchLayer(id, { rect })}
           />
+          {installation?.floorplan && (
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 0.5 }}>
+              <Switch
+                size="small"
+                checked={showFloorplan}
+                onChange={(e) => toggleFloorplan(e.target.checked)}
+              />
+              <Typography variant="body2" color="text.secondary">
+                Show floorplan
+              </Typography>
+            </Stack>
+          )}
           <Card>
             <CardContent>
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">

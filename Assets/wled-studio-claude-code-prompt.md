@@ -438,6 +438,66 @@ strips that have no dedicated white channel:
 - Devices with a real white channel (RGBW / RGBW+CCT) already do white on the
   hardware via `seg.cct`; this correction is for RGB-only strips.
 
+### Rundown page (milestone 8)
+
+A **Rundown** page: an ordered list of **cues**, each of which activates a saved
+**Studio scene** on the stream output. Cues can be added, edited and deleted; the
+list is shown as a clean table (or equivalent). One rundown for now.
+
+Each cue holds:
+
+- **Cue Number** — its position/label in the list.
+- **Trigger** — how the cue starts once the rundown reaches it. Default **Manual**
+  (waits for a GO). Other options:
+  - **Follow + Time** — starts automatically `Time` seconds after the *previous*
+    cue starts (`Time` ≥ 0, may be 0 = immediately with the previous).
+  - **Wait + Time** — starts automatically `Time` seconds after the *previous* cue
+    *finishes* (`Time` ≥ 0, may be 0).
+- **Target Scene** — dropdown of saved scenes; the scene this cue puts on the
+  stream output.
+- **Fade In** — 0 … 500000 ms. Non-zero: the output starts black and fades into
+  the target scene over this time.
+- **Fade Out** — 0 … 500000 ms. Non-zero: at the end of the cue's run time the
+  output fades to black over this time.
+- **Duration** — how long the cue runs before it ends / starts its fade-out.
+  Entered as time: `hh:mm:ss` (`1:30:24`), `mm:ss` (`1:20`), or bare seconds
+  (`35`).
+
+### Trigger page (milestone 9)
+
+A **Trigger** page: external inputs routed to system actions — activate a scene,
+start a pixel paint on a device, total blackout, start a cue in the rundown, and
+similar. Clean table view, normally empty, with a **"+ Add trigger"** button in
+the same spot as the other pages' add buttons. Triggers are always editable and
+deletable.
+
+The trigger **input** is one of **OSC**, **ArtNet**, **sACN**, **HTTP REST**.
+Selecting the input type reveals exactly the fields that input needs:
+
+- **OSC** — **Address** (e.g. `/wled/trigger/in1`) and **Payload**.
+- **ArtNet** — incoming **Universe** and **DMX channel**. Validate that the
+  universe is **not already in use by any managed WLED device**. The trigger
+  fires when that channel on that universe is set to **255**.
+- **sACN** — incoming **Universe** and **channel** (same 255 = fire rule; same
+  universe-conflict check).
+- **HTTP REST** — a user-defined **endpoint name**; a POST to
+  `http://<BASE-URL>/trigger/<name>` fires the trigger.
+
+Each trigger also carries the **action** it performs when it fires (scene,
+pixel-paint, blackout, rundown GO, …).
+
+### Stage page — per-device Stream Solid (small, fold into milestone 7 or 8)
+
+On the Stage page's DDP transport test, add a **"Stream Solid"** button **per
+device** in the device list, so the DDP transport can be tested against a single
+device instead of all connected devices at once.
+
+### iOS web app (milestone 10)
+
+An **iOS web app** exposing all the functionality of the desktop variant, with
+UX/UI purpose-built for iOS (native-feeling navigation, touch targets, layout) —
+not just the desktop UI in a narrow viewport.
+
 ### Media pixel-mapping — image / video onto the fixtures (research first, later milestone)
 
 A **Media Source** the user can place on the layout canvas alongside fixtures:

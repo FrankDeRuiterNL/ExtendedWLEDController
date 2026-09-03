@@ -7,6 +7,7 @@ import { openDb } from './db/index.js';
 import { deviceRoutes, errorHandler } from './devices/routes.js';
 import { DeviceService } from './devices/service.js';
 import { DmxService } from './dmx/service.js';
+import { FloorplanStore } from './installation/floorplanStore.js';
 import { InstallationStore } from './installation/store.js';
 import { BrowserHub } from './realtime/browserHub.js';
 import { RealtimeHub } from './realtime/hub.js';
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
   const dmx = new DmxService(db, config);
   const service = new DeviceService(db, config, hub, dmx);
   const installation = new InstallationStore(db);
+  const floorplans = new FloorplanStore(join(config.dataDir, 'floorplan'));
   const scenes = new SceneStore(db);
   const stream = new StreamService(db, config, hub, installation);
   const paint = new PaintService(db, config);
@@ -48,7 +50,10 @@ async function main(): Promise<void> {
   app.use('/api/dmx', dmxRoutes(dmx));
   app.use('/api/stream', streamRoutes(stream, scenes));
   app.use('/api/scenes', sceneRoutes(scenes));
-  app.use('/api/installation', installationRoutes(installation, () => stream.onInstallationChanged()));
+  app.use(
+    '/api/installation',
+    installationRoutes(installation, floorplans, () => stream.onInstallationChanged()),
+  );
 
   const webDir =
     config.webDir ?? (existsSync(join(process.cwd(), 'packages/web/dist')) ? join(process.cwd(), 'packages/web/dist') : null);

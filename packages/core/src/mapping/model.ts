@@ -90,10 +90,31 @@ export interface Fixture {
   enabled: boolean;
 }
 
+/**
+ * A room floorplan / reference image placed on the layout canvas. Purely a
+ * visual aid — it never reaches the wire. The bytes live on the server; the
+ * installation keeps only this reference plus the image's on-canvas transform.
+ */
+export interface FloorplanRef {
+  /** File name on the server, under the data dir. */
+  asset: string;
+  /** Bumped on every re-upload; use as a cache-busting query param on the URL. */
+  rev: number;
+  /** The image's own pixel dimensions — the editor keeps this aspect ratio. */
+  naturalWidth: number;
+  naturalHeight: number;
+  /** Centre of the image on the canvas, in canvas units. */
+  position: Vec2;
+  /** Size of the image on the canvas, in canvas units. */
+  size: Vec2;
+}
+
 export interface Installation {
   fixtures: Fixture[];
   /** Canvas dimensions in arbitrary units; only the aspect ratio matters. */
   canvas: { width: number; height: number };
+  /** Optional room floorplan shown behind the fixtures (preview-only). */
+  floorplan?: FloorplanRef;
 }
 
 export const EMPTY_INSTALLATION: Installation = {
