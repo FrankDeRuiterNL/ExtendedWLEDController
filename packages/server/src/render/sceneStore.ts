@@ -15,10 +15,18 @@ const rect = z.object({
   h: z.number().min(0).max(3),
 });
 
+const media = z.object({
+  assetId: z.string().min(1).max(64),
+  filename: z.string().max(200),
+  naturalWidth: z.number().positive(),
+  naturalHeight: z.number().positive(),
+});
+
 const layer = z.object({
   id: z.string().min(1).max(64),
   name: z.string().max(64).optional(),
-  effectId: z.string().min(1).max(64),
+  // Empty for a media layer; otherwise an effect id.
+  effectId: z.string().max(64),
   params,
   blend: blendMode,
   opacity: z.number().min(0).max(1),
@@ -27,6 +35,7 @@ const layer = z.object({
   mask: z
     .object({ effectId: z.string().min(1).max(64), params, invert: z.boolean().optional() })
     .nullish(),
+  media: media.nullish(),
 });
 
 export const sceneSchema = z.object({

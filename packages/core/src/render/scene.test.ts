@@ -3,7 +3,16 @@ import { mapInstallation } from '../mapping/engine.js';
 import type { Installation } from '../mapping/model.js';
 import { blend } from './blend.js';
 import { listEffects, getEffect, effectIds } from './registry.js';
-import { EMPTY_SCENE, makeLayer, sampleScene, unknownEffectIds, type Scene } from './scene.js';
+import {
+  EMPTY_SCENE,
+  fitMediaRect,
+  makeLayer,
+  makeMediaLayer,
+  sampleScene,
+  unknownEffectIds,
+  type MediaFrame,
+  type Scene,
+} from './scene.js';
 import { defaultParamValues } from './types.js';
 
 describe('blend', () => {
@@ -226,5 +235,59 @@ describe('sampleScene', () => {
     };
     expect(unknownEffectIds(s)).toEqual(['does-not-exist']);
     expect(sampleScene(s, 0.5, 0.5, 0)).toEqual([9, 9, 9]);
+  });
+});
+
+describe('media layers', () => {
+  // 2×1 frame: left pixel red, right pixel green
+  const frame: MediaFrame = {
+    width: 2,
+    height: 1,
+    data: new Uint8ClampedArray([255, 0, 0, 255, 0, 255, 0, 255]),
+  };
+  const mediaScene = (): Scene => ({
+    name: 't',
+    background: [0, 0, 0],
+    layers: [{ ...makeMediaLayer('m'), media: { assetId: 'x', filename: 'p.png', naturalWidth: 2, naturalHeight: 1 } }],
+  });
+
+  it('samples the provided frame by nearest-neighbour', () => {
+    const s = mediaScene();
+    const frames = new Map([['m', frame]]);
+    expect(sampleScene(s, 0.25, 0.5, 0, frames)).toEqual([255, 0, 0]);
+    expect(sampleScene(s, 0.75, 0.5, 0, frames)).toEqual([0, 255, 0]);
+  });
+
+  it('contributes nothing when no frame is supplied', () => {
+    expect(sampleScene(mediaScene(), 0.5, 0.5, 0)).toEqual([0, 0, 0]);
+    expect(sampleScene(mediaScene(), 0.5, 0.5, 0, new Map())).toEqual([0, 0, 0]);
+  });
+
+  it('respects the layer rect — outside the box falls through', () => {
+    const s = mediaScene();
+    s.layers[0]!.rect = { x: 0, y: 0, w: 0.5, h: 1 };
+    const frames = new Map([['m', frame]]);
+    expect(sampleScene(s, 0.25, 0.5, 0, frames)).toEqual([0, 255, 0]); // u=0.5 within box → right pixel
+    expect(sampleScene(s, 0.75, 0.5, 0, frames)).toEqual([0, 0, 0]); // outside box
+  });
+
+  it('media layers are not flagged as unknown effects', () => {
+    expect(unknownEffectIds(mediaScene())).toEqual([]);
+  });
+
+  it('honours per-pixel alpha from the frame', () => {
+    const s = mediaScene();
+    s.layers[0]!.media!.naturalWidth = 1;
+    const transparent: MediaFrame = { width: 1, height: 1, data: new Uint8ClampedArray([255, 255, 255, 0]) };
+    expect(sampleScene(s, 0.5, 0.5, 0, new Map([['m', transparent]]))).toEqual([0, 0, 0]);
+  });
+
+  it('fitMediaRect keeps a wide image inside the canvas at true aspect', () => {
+    const r = fitMediaRect(1000, 250, { width: 16, height: 9 });
+    // image AR 4, canvas AR 16/9 → rect ratio 4/(16/9)=2.25 → w=1, h=1/2.25
+    expect(r.w).toBeCloseTo(1);
+    expect(r.h).toBeCloseTo(1 / 2.25);
+    expect(r.x).toBeCloseTo(0);
+    expect(r.y).toBeCloseTo((1 - 1 / 2.25) / 2);
   });
 });

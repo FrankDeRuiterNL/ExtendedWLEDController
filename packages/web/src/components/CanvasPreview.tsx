@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Box } from '@mui/material';
 import {
   FULL_RECT,
@@ -7,9 +7,11 @@ import {
   sampleScene,
   type Installation,
   type LayerRect,
+  type MediaFrame,
   type Scene,
 } from '@ewc/core';
 import { floorplanUrl } from '../api/stage.js';
+import { loadMediaFrame } from '../api/media.js';
 import { md3 } from '../theme/tokens.js';
 
 interface Props {
@@ -36,7 +38,13 @@ type Corner = 'nw' | 'ne' | 'sw' | 'se';
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
-function resizeRect(r: LayerRect, corner: Corner, dx: number, dy: number): LayerRect {
+function resizeRect(
+  r: LayerRect,
+  corner: Corner,
+  dx: number,
+  dy: number,
+  aspect?: number,
+): LayerRect {
   let { x, y, w, h } = r;
   const MIN = 0.03;
   if (corner === 'nw' || corner === 'sw') {
@@ -51,6 +59,14 @@ function resizeRect(r: LayerRect, corner: Corner, dx: number, dy: number): Layer
     y = ny;
   }
   if (corner === 'sw' || corner === 'se') h = clamp(h + dy, MIN, 2.5);
+
+  // Aspect lock (media layers): drive height from width, keeping the corner
+  // opposite the drag anchored.
+  if (aspect && aspect > 0) {
+    const nh = w / aspect;
+    if (corner === 'nw' || corner === 'ne') y += h - nh; // bottom edge stays put
+    h = nh;
+  }
   return { x, y, w, h };
 }
 
@@ -75,8 +91,32 @@ export function CanvasPreview({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const state = useRef({ scene, installation, playing, showFixtures, epochMs, deviceGains });
-  state.current = { scene, installation, playing, showFixtures, epochMs, deviceGains };
+
+  // Decoded frames for the scene's media layers, keyed by layer id.
+  const [mediaFrames, setMediaFrames] = useState<Map<string, MediaFrame>>(() => new Map());
+  const mediaKey = scene.layers
+    .map((l) => `${l.id}:${l.media?.assetId ?? ''}`)
+    .join(',');
+  useEffect(() => {
+    const specs = scene.layers.flatMap((l) => (l.media ? [[l.id, l.media.assetId] as const] : []));
+    if (specs.length === 0) {
+      setMediaFrames(new Map());
+      return;
+    }
+    let cancelled = false;
+    Promise.all(specs.map(async ([id, asset]) => [id, await loadMediaFrame(asset)] as const))
+      .then((entries) => {
+        if (!cancelled) setMediaFrames(new Map(entries));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaKey]);
+
+  const state = useRef({ scene, installation, playing, showFixtures, epochMs, deviceGains, mediaFrames });
+  state.current = { scene, installation, playing, showFixtures, epochMs, deviceGains, mediaFrames };
   const drag = useRef<
     | { id: string; mode: 'move' | Corner; startRect: LayerRect; px: number; py: number }
     | null
@@ -121,7 +161,7 @@ export function CanvasPreview({
       const data = img.data;
       for (let py = 0; py < h; py++) {
         for (let px = 0; px < w; px++) {
-          const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t);
+          const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t, s.mediaFrames);
           const o = (py * w + px) * 4;
           data[o] = c[0];
           data[o + 1] = c[1];
@@ -136,7 +176,7 @@ export function CanvasPreview({
         // balance applied — the one place the preview can reflect a per-device
         // correction (the shared canvas can't carry three white points).
         for (const led of mapInstallation(s.installation)) {
-          const c = sampleScene(s.scene, led.x, led.y, t);
+          const c = sampleScene(s.scene, led.x, led.y, t, s.mediaFrames);
           const g = s.deviceGains?.[led.deviceId];
           const r = g ? c[0] * g[0] : c[0];
           const gr = g ? c[1] * g[1] : c[1];
@@ -181,8 +221,15 @@ export function CanvasPreview({
         y: clamp(d.startRect.y + dy, -0.5, 1.5 - d.startRect.h),
       });
     } else {
-      onLayerRect(d.id, resizeRect(d.startRect, d.mode, dx, dy));
+      onLayerRect(d.id, resizeRect(d.startRect, d.mode, dx, dy, mediaAspect(d.id)));
     }
+  };
+
+  /** Locked rect w/h ratio for a media layer (native ratio ÷ canvas ratio), else undefined. */
+  const mediaAspect = (layerId: string): number | undefined => {
+    const m = scene.layers.find((l) => l.id === layerId)?.media;
+    if (!m) return undefined;
+    return (m.naturalWidth / m.naturalHeight) / aspect;
   };
 
   const endDrag = () => {

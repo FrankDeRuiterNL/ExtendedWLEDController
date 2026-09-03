@@ -15,6 +15,7 @@ import { SettingsStore } from '../db/settings.js';
 import { log } from '../logger.js';
 import { DeviceRepo, type DeviceRow } from '../devices/repo.js';
 import type { InstallationStore } from '../installation/store.js';
+import type { MediaStore } from '../media/mediaStore.js';
 import { postState } from '../wled/httpClient.js';
 import { sceneFrameProducer } from '../render/sceneProducer.js';
 import {
@@ -113,6 +114,7 @@ export class StreamService {
     private readonly config: Config,
     private readonly hub: RealtimeHub,
     private readonly installations: InstallationStore,
+    private readonly media?: MediaStore,
   ) {
     this.repo = new DeviceRepo(db);
     this.settings = new SettingsStore(db);
@@ -133,7 +135,7 @@ export class StreamService {
     const targets = this.collectTargets();
     this.streamingIds = new Set(targets.map((t) => t.deviceId));
     this.sender.setTargets(targets);
-    if (this.scene) this.sender.setProducer(sceneFrameProducer(this.scene, this.installations.get()));
+    if (this.scene) this.sender.setProducer(sceneFrameProducer(this.scene, this.installations.get(), this.media));
   }
 
   /**
@@ -397,14 +399,14 @@ export class StreamService {
     if (unknown.length) log.warn(`stream: scene "${scene.name}" has unknown effects`, { unknown });
 
     if (this.mode === 'scene' && this.sender.running) {
-      this.sender.setProducer(sceneFrameProducer(scene, this.installations.get()));
+      this.sender.setProducer(sceneFrameProducer(scene, this.installations.get(), this.media));
       return this.status();
     }
 
     this.mode = 'scene';
     const targets = this.collectTargets();
     this.streamingIds = new Set(targets.map((t) => t.deviceId));
-    this.sender.start(targets, sceneFrameProducer(scene, this.installations.get()));
+    this.sender.start(targets, sceneFrameProducer(scene, this.installations.get(), this.media));
     log.info(`stream: scene "${scene.name}" (${scene.layers.length} layers) → ${targets.length} device(s)`);
     return this.status();
   }

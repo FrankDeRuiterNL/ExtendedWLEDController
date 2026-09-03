@@ -13,6 +13,7 @@ import {
   DialogTitle,
   Divider,
   IconButton,
+  Menu,
   MenuItem,
   Stack,
   Switch,
@@ -32,10 +33,12 @@ import {
   EMPTY_SCENE,
   FULL_RECT,
   effectDefaults,
+  fitMediaRect,
   getEffect,
   kelvinToRgbGain,
   listEffects,
   makeLayer,
+  makeMediaLayer,
   type BlendMode,
   type Layer,
   type LayerRect,
@@ -43,6 +46,7 @@ import {
 } from '@ewc/core';
 import { CanvasPreview } from '../components/CanvasPreview.js';
 import { ParamControl, hexToRgb, rgbToHex } from '../components/ParamControl.js';
+import { mediaUrl, useUploadMedia, type UploadedMedia } from '../api/media.js';
 import {
   useCreateScene,
   useDeleteScene,
@@ -129,6 +133,152 @@ function RegionEditor({ rect, onChange }: { rect: LayerRect; onChange: (r: Layer
   );
 }
 
+function MediaLayerInspector({
+  layer,
+  canvas,
+  onPatch,
+  onUploaded,
+}: {
+  layer: Layer;
+  canvas: { width: number; height: number };
+  onPatch: (p: Partial<Layer>) => void;
+  onUploaded: (m: UploadedMedia) => void;
+}) {
+  const upload = useUploadMedia();
+  const fileInput = useRef<HTMLInputElement>(null);
+  const media = layer.media ?? null;
+
+  const pick = () => fileInput.current?.click();
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (f) upload.mutate(f, { onSuccess: onUploaded });
+  };
+
+  return (
+    <Card>
+      <CardContent>
+        <Stack spacing={1.5}>
+          <TextField
+            size="small"
+            label="Layer name"
+            placeholder={media?.filename ?? 'Media layer'}
+            value={layer.name ?? ''}
+            onChange={(e) => onPatch({ name: e.target.value })}
+            InputLabelProps={{ shrink: true }}
+          />
+
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            hidden
+            onChange={onFile}
+          />
+
+          {media ? (
+            <Stack direction="row" spacing={1.5} alignItems="center">
+              <Box
+                component="img"
+                src={mediaUrl(media.assetId)}
+                alt=""
+                sx={{
+                  width: 64,
+                  height: 64,
+                  objectFit: 'contain',
+                  borderRadius: 1,
+                  border: `1px solid ${md3.outline}`,
+                  bgcolor: '#000',
+                }}
+              />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="body2" noWrap title={media.filename}>
+                  {media.filename}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {media.naturalWidth}×{media.naturalHeight}
+                </Typography>
+                <Button size="small" onClick={pick} disabled={upload.isPending} sx={{ display: 'block', mt: 0.5 }}>
+                  {upload.isPending ? 'Uploading…' : 'Replace image'}
+                </Button>
+              </Box>
+            </Stack>
+          ) : (
+            <Button variant="outlined" onClick={pick} disabled={upload.isPending}>
+              {upload.isPending ? 'Uploading…' : 'Upload image'}
+            </Button>
+          )}
+          {upload.isError && (
+            <Alert severity="error">{(upload.error as Error).message}</Alert>
+          )}
+          <Typography variant="caption" color="text.secondary">
+            Fixtures under the box take their colour from the image. `.mp4` / `.mov` video, trim and
+            playback come in a later update. Re-upload to change the stored resolution.
+          </Typography>
+
+          <Divider>
+            <Typography variant="caption" color="text.secondary">
+              Blend
+            </Typography>
+          </Divider>
+          <TextField
+            select
+            size="small"
+            label="Blend"
+            value={layer.blend}
+            onChange={(e) => onPatch({ blend: e.target.value as BlendMode })}
+          >
+            {BLEND_MODES.map((b) => (
+              <MenuItem key={b.value} value={b.value}>
+                {b.label}
+              </MenuItem>
+            ))}
+          </TextField>
+          <Box>
+            <Stack direction="row" justifyContent="space-between">
+              <Typography variant="body2">Opacity</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {Math.round(layer.opacity * 100)}%
+              </Typography>
+            </Stack>
+            <Box sx={{ px: 0.5 }}>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={layer.opacity}
+                onChange={(e) => onPatch({ opacity: Number(e.target.value) })}
+                style={{ width: '100%' }}
+              />
+            </Box>
+          </Box>
+
+          <Divider>
+            <Typography variant="caption" color="text.secondary">
+              Canvas region
+            </Typography>
+          </Divider>
+          <RegionEditor
+            rect={layer.rect ?? FULL_RECT}
+            onChange={(rect) => onPatch({ rect })}
+          />
+          {media && (
+            <Button
+              size="small"
+              onClick={() =>
+                onPatch({ rect: fitMediaRect(media.naturalWidth, media.naturalHeight, canvas) })
+              }
+            >
+              Reset box to image aspect
+            </Button>
+          )}
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function StudioPage() {
   const { data: sceneList } = useScenes();
   const { data: installation } = useInstallation();
@@ -171,6 +321,9 @@ export function StudioPage() {
 
   /** Pending scene switch awaiting confirmation (only shown while streaming). */
   const [confirmLoad, setConfirmLoad] = useState<{ id: number | null } | null>(null);
+
+  /** Anchor for the "+ Add" layer-type menu. */
+  const [addAnchor, setAddAnchor] = useState<null | HTMLElement>(null);
 
   const loadScene = (id: number | null) => {
     setSceneId(id);
@@ -219,6 +372,26 @@ export function StudioPage() {
     setSelectedId(l.id);
     setDirty(true);
   };
+  const addMediaLayer = () => {
+    const l = makeMediaLayer(newLayerId());
+    setScene((s) => ({ ...s, layers: [...s.layers, l] }));
+    setSelectedId(l.id);
+    setDirty(true);
+  };
+  const setLayerMedia = (id: string, m: UploadedMedia) => {
+    patchLayer(id, {
+      media: {
+        assetId: m.assetId,
+        filename: m.filename,
+        naturalWidth: m.naturalWidth,
+        naturalHeight: m.naturalHeight,
+      },
+      rect: fitMediaRect(m.naturalWidth, m.naturalHeight, {
+        width: installation?.canvas.width ?? 16,
+        height: installation?.canvas.height ?? 9,
+      }),
+    });
+  };
   const removeLayer = (id: string) => {
     setScene((s) => ({ ...s, layers: s.layers.filter((l) => l.id !== id) }));
     setSelectedId((cur) => (cur === id ? null : cur));
@@ -226,7 +399,8 @@ export function StudioPage() {
   };
 
   const selected = scene.layers.find((l) => l.id === selectedId) ?? null;
-  const selectedDef = selected ? getEffect(selected.effectId) : undefined;
+  const selectedIsMedia = !!selected && selected.media !== undefined;
+  const selectedDef = selected && !selectedIsMedia ? getEffect(selected.effectId) : undefined;
 
   const running = stream?.running ?? false;
   const sceneRunning = running && stream?.mode === 'scene';
@@ -488,14 +662,37 @@ export function StudioPage() {
             <CardContent>
               <Stack direction="row" alignItems="center" justifyContent="space-between">
                 <Typography variant="h4">Layers</Typography>
-                <Button size="small" startIcon={<AddIcon />} onClick={() => addLayer('solid')}>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={(e) => setAddAnchor(e.currentTarget)}
+                >
                   Add
                 </Button>
+                <Menu anchorEl={addAnchor} open={!!addAnchor} onClose={() => setAddAnchor(null)}>
+                  <MenuItem
+                    onClick={() => {
+                      addLayer('solid');
+                      setAddAnchor(null);
+                    }}
+                  >
+                    FX Layer
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      addMediaLayer();
+                      setAddAnchor(null);
+                    }}
+                  >
+                    Media Layer
+                  </MenuItem>
+                </Menu>
               </Stack>
 
               {scene.layers.length === 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  No layers. Add one to start — it&apos;s a plain solid you can change below.
+                  No layers. <b>FX Layer</b> is a plain solid you can change below; <b>Media Layer</b>{' '}
+                  maps an image onto the fixtures under it.
                 </Typography>
               )}
 
@@ -503,6 +700,11 @@ export function StudioPage() {
                 {[...scene.layers].reverse().map((l) => {
                   const def = getEffect(l.effectId);
                   const isSel = l.id === selectedId;
+                  const label =
+                    l.name?.trim() ||
+                    (l.media !== undefined
+                      ? l.media?.filename || 'Media layer'
+                      : def?.name || l.effectId);
                   return (
                     <Stack
                       key={l.id}
@@ -526,8 +728,9 @@ export function StudioPage() {
                         onChange={(e) => patchLayer(l.id, { enabled: e.target.checked })}
                       />
                       <Typography variant="body2" sx={{ flex: 1 }} noWrap>
-                        {l.name?.trim() || def?.name || l.effectId}
+                        {label}
                         <Typography component="span" variant="caption" color="text.secondary">
+                          {l.media !== undefined && ' · media'}
                           {` · ${pct(l.opacity)}%`}
                           {l.blend !== 'normal' && ` · ${l.blend}`}
                         </Typography>
@@ -547,6 +750,16 @@ export function StudioPage() {
               </Stack>
             </CardContent>
           </Card>
+
+          {selected && selectedIsMedia && (
+            <MediaLayerInspector
+              key={selected.id}
+              layer={selected}
+              canvas={installation?.canvas ?? { width: 16, height: 9 }}
+              onPatch={(p) => patchLayer(selected.id, p)}
+              onUploaded={(m) => setLayerMedia(selected.id, m)}
+            />
+          )}
 
           {selected && selectedDef && (
             <Card>

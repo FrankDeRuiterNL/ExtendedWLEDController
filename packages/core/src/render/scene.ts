@@ -13,13 +13,56 @@
 import { blend, type BlendMode } from './blend.js';
 import { clamp8, luma } from './color.js';
 import { getEffect } from './registry.js';
-import { withParamDefaults, type ParamValues, type RGB } from './types.js';
+import { withParamDefaults, type ParamValues, type RGB, type RGBA } from './types.js';
 
 export interface LayerMask {
   effectId: string;
   params: ParamValues;
   /** Invert the mask (bright → hidden). */
   invert?: boolean;
+}
+
+/**
+ * A **media layer** shows an uploaded image (milestone 8a; video is 8b) on the
+ * canvas. The pixels are supplied at render time by a {@link MediaFrames}
+ * provider keyed by layer id — the browser fills it from a decoded `<img>`, the
+ * server from the stored RGBA blob — so `@ewc/core` never decodes anything.
+ */
+export interface MediaLayerSpec {
+  /** Server asset id for the decoded, downscaled RGBA blob. */
+  assetId: string;
+  /** Original upload name, shown in the inspector. */
+  filename: string;
+  /** Native pixel size of the source — the region editor locks to this ratio. */
+  naturalWidth: number;
+  naturalHeight: number;
+}
+
+/**
+ * Longest edge (px) a media frame is downscaled to before upload. Fixtures are
+ * sparse — Frank's largest run is 150 LEDs in a line — so 256 is already far
+ * more than the wire can resolve, and it keeps a stored RGBA blob ≤ 256 KB. To
+ * change an image's resolution, re-upload it.
+ */
+export const MEDIA_MAX_EDGE = 256;
+
+/** One decoded frame: tightly packed RGBA, row-major, `width * height * 4` bytes. */
+export interface MediaFrame {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+}
+
+/** Resolves a media layer's current frame by layer id. A plain Map is ideal. */
+export type MediaFrames = { get(layerId: string): MediaFrame | undefined };
+
+/** Nearest-neighbour sample of a frame at normalised (u,v), both 0..1. Returns RGBA (a 0..1). */
+export function sampleMediaFrame(frame: MediaFrame, u: number, v: number): RGBA {
+  const px = Math.min(frame.width - 1, Math.max(0, (u * frame.width) | 0));
+  const py = Math.min(frame.height - 1, Math.max(0, (v * frame.height) | 0));
+  const o = (py * frame.width + px) * 4;
+  const d = frame.data;
+  return [d[o] ?? 0, d[o + 1] ?? 0, d[o + 2] ?? 0, (d[o + 3] ?? 255) / 255];
 }
 
 /**
@@ -42,15 +85,18 @@ export interface Layer {
   id: string;
   /** User label. Empty / absent → the UI falls back to the effect's name. */
   name?: string;
+  /** The effect this layer renders. Empty string for a media layer. */
   effectId: string;
   params: ParamValues;
   blend: BlendMode;
   /** 0..1 */
   opacity: number;
   enabled: boolean;
-  /** Canvas region the effect fills. Absent = full canvas (back-compat). */
+  /** Canvas region the effect / media fills. Absent = full canvas (back-compat). */
   rect?: LayerRect;
   mask?: LayerMask | null;
+  /** Set on a **media layer** — the layer shows this image instead of an effect. */
+  media?: MediaLayerSpec | null;
 }
 
 export interface Scene {
@@ -74,14 +120,25 @@ export const EMPTY_SCENE: Scene = {
 export function unknownEffectIds(scene: Scene): string[] {
   const out = new Set<string>();
   for (const l of scene.layers) {
+    if (l.media || !l.effectId) continue; // media layers (and empty ids) don't use an effect
     if (!getEffect(l.effectId)) out.add(l.effectId);
     if (l.mask && !getEffect(l.mask.effectId)) out.add(l.mask.effectId);
   }
   return [...out];
 }
 
-/** Composite one canvas point. x,y in [0,1] (y down), t in seconds. */
-export function sampleScene(scene: Scene, x: number, y: number, t: number): RGB {
+/**
+ * Composite one canvas point. x,y in [0,1] (y down), t in seconds. `mediaFrames`
+ * supplies the current frame for any media layer (by layer id); omit it and
+ * media layers contribute nothing.
+ */
+export function sampleScene(
+  scene: Scene,
+  x: number,
+  y: number,
+  t: number,
+  mediaFrames?: MediaFrames,
+): RGB {
   let dst: RGB = [
     clamp8(scene.background[0]),
     clamp8(scene.background[1]),
@@ -90,8 +147,9 @@ export function sampleScene(scene: Scene, x: number, y: number, t: number): RGB 
 
   for (const layer of scene.layers) {
     if (!layer.enabled || layer.opacity <= 0) continue;
-    const def = getEffect(layer.effectId);
-    if (!def) continue; // unknown effect — see unknownEffectIds()
+
+    const def = layer.media ? undefined : getEffect(layer.effectId);
+    if (!layer.media && !def) continue; // unknown effect — see unknownEffectIds()
 
     // Map the canvas point into this layer's box; skip if it falls outside.
     const r = layer.rect;
@@ -104,8 +162,14 @@ export function sampleScene(scene: Scene, x: number, y: number, t: number): RGB 
       if (lx < 0 || lx > 1 || ly < 0 || ly > 1) continue;
     }
 
-    const params = withParamDefaults(def, layer.params);
-    const src = def.render(lx, ly, t, params);
+    let src: RGBA;
+    if (layer.media) {
+      const frame = mediaFrames?.get(layer.id);
+      if (!frame || frame.width <= 0 || frame.height <= 0) continue;
+      src = sampleMediaFrame(frame, lx, ly);
+    } else {
+      src = def!.render(lx, ly, t, withParamDefaults(def!, layer.params));
+    }
 
     let a = src[3] * layer.opacity;
     if (a <= 0) continue;
@@ -140,4 +204,39 @@ export function makeLayer(id: string, effectId: string): Layer {
     rect: { ...FULL_RECT },
     mask: null,
   };
+}
+
+/** A fresh, empty media layer — `media` is filled in once an image is uploaded. */
+export function makeMediaLayer(id: string): Layer {
+  return {
+    id,
+    effectId: '',
+    params: {},
+    blend: 'normal',
+    opacity: 1,
+    enabled: true,
+    rect: { ...FULL_RECT },
+    mask: null,
+    media: null,
+  };
+}
+
+/**
+ * A {@link LayerRect} centred on the canvas that renders `natW × natH` at its
+ * true aspect ratio (accounting for the canvas's own aspect) and fits inside it.
+ */
+export function fitMediaRect(
+  natW: number,
+  natH: number,
+  canvas: { width: number; height: number },
+): LayerRect {
+  const imgAR = natW > 0 && natH > 0 ? natW / natH : 1;
+  const canvasAR = canvas.width > 0 && canvas.height > 0 ? canvas.width / canvas.height : 1;
+  // rect w/h ratio needed so the image shows at imgAR on screen
+  const ratio = imgAR / canvasAR;
+  let w = 1;
+  let h = 1;
+  if (ratio >= 1) h = 1 / ratio;
+  else w = ratio;
+  return { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
 }

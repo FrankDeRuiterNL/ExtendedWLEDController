@@ -9,6 +9,8 @@ import { DeviceService } from './devices/service.js';
 import { DmxService } from './dmx/service.js';
 import { FloorplanStore } from './installation/floorplanStore.js';
 import { InstallationStore } from './installation/store.js';
+import { MediaStore } from './media/mediaStore.js';
+import { mediaRoutes } from './media/routes.js';
 import { BrowserHub } from './realtime/browserHub.js';
 import { RealtimeHub } from './realtime/hub.js';
 import { dmxRoutes, installationRoutes, sceneRoutes, streamRoutes } from './realtime/routes.js';
@@ -29,8 +31,9 @@ async function main(): Promise<void> {
   const service = new DeviceService(db, config, hub, dmx);
   const installation = new InstallationStore(db);
   const floorplans = new FloorplanStore(join(config.dataDir, 'floorplan'));
+  const media = new MediaStore(join(config.dataDir, 'media'));
   const scenes = new SceneStore(db);
-  const stream = new StreamService(db, config, hub, installation);
+  const stream = new StreamService(db, config, hub, installation, media);
   const paint = new PaintService(db, config);
   const pixelScenes = new PixelSceneStore(db);
   const bake = new BakeService(db, config);
@@ -50,6 +53,7 @@ async function main(): Promise<void> {
   app.use('/api/dmx', dmxRoutes(dmx));
   app.use('/api/stream', streamRoutes(stream, scenes));
   app.use('/api/scenes', sceneRoutes(scenes));
+  app.use('/api/media', mediaRoutes(media));
   app.use(
     '/api/installation',
     installationRoutes(installation, floorplans, () => stream.onInstallationChanged()),
