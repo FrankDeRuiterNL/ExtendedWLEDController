@@ -29,13 +29,32 @@ export interface LayerMask {
  * server from the stored RGBA blob — so `@ewc/core` never decodes anything.
  */
 export interface MediaLayerSpec {
-  /** Server asset id for the decoded, downscaled RGBA blob. */
+  /** Server asset id for the decoded, downscaled RGBA blob (image) or mp4 (video). */
   assetId: string;
   /** Original upload name, shown in the inspector. */
   filename: string;
-  /** Native pixel size of the source — the region editor locks to this ratio. */
+  /**
+   * `'video'` assets are a downscaled, no-audio clip the layer loops over time;
+   * `'image'` (the default when absent) is a single still frame.
+   */
+  kind?: 'image' | 'video';
+  /**
+   * Native pixel size of the **original** source — the region editor locks to
+   * this ratio, so it matches what the user sees in their own image/video
+   * player. The stored (downscaled) size lives in the server asset meta only.
+   */
   naturalWidth: number;
   naturalHeight: number;
+}
+
+/**
+ * Frame index for a video looping at `fps` over `frameCount` frames at wall-time
+ * `tMs`. Loop-only for milestone 8b; trim + playback modes arrive in 8c.
+ */
+export function videoFrameIndex(tMs: number, fps: number, frameCount: number): number {
+  if (frameCount <= 0 || fps <= 0 || !Number.isFinite(tMs)) return 0;
+  const f = Math.floor((Math.max(0, tMs) / 1000) * fps);
+  return ((f % frameCount) + frameCount) % frameCount;
 }
 
 /**

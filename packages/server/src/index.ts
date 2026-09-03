@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import express from 'express';
 import { APP_VERSION } from '@ewc/core';
@@ -11,6 +11,7 @@ import { FloorplanStore } from './installation/floorplanStore.js';
 import { InstallationStore } from './installation/store.js';
 import { MediaStore } from './media/mediaStore.js';
 import { mediaRoutes } from './media/routes.js';
+import { probeFfmpeg } from './media/videoTranscode.js';
 import { BrowserHub } from './realtime/browserHub.js';
 import { RealtimeHub } from './realtime/hub.js';
 import { dmxRoutes, installationRoutes, sceneRoutes, streamRoutes } from './realtime/routes.js';
@@ -32,6 +33,13 @@ async function main(): Promise<void> {
   const installation = new InstallationStore(db);
   const floorplans = new FloorplanStore(join(config.dataDir, 'floorplan'));
   const media = new MediaStore(join(config.dataDir, 'media'));
+  // Scratch space for in-progress media uploads — on the data volume, not the
+  // container's writable layer. Wiped on boot so a crash mid-upload can't leak.
+  const mediaTmpDir = join(config.dataDir, 'tmp');
+  rmSync(mediaTmpDir, { recursive: true, force: true });
+  mkdirSync(mediaTmpDir, { recursive: true });
+  const ffmpegAvailable = await probeFfmpeg();
+  log.info(ffmpegAvailable ? 'ffmpeg found — video media layers enabled' : 'ffmpeg not found — video media layers disabled');
   const scenes = new SceneStore(db);
   const stream = new StreamService(db, config, hub, installation, media);
   const paint = new PaintService(db, config);
@@ -53,7 +61,7 @@ async function main(): Promise<void> {
   app.use('/api/dmx', dmxRoutes(dmx));
   app.use('/api/stream', streamRoutes(stream, scenes));
   app.use('/api/scenes', sceneRoutes(scenes));
-  app.use('/api/media', mediaRoutes(media));
+  app.use('/api/media', mediaRoutes(media, { ffmpeg: ffmpegAvailable, tmpDir: mediaTmpDir }));
   app.use(
     '/api/installation',
     installationRoutes(installation, floorplans, () => stream.onInstallationChanged()),

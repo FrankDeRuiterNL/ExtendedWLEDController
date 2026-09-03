@@ -1,31 +1,68 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { MEDIA_MAX_EDGE } from '@ewc/core';
 
-/** Upper bound on a stored RGBA blob (256×256×4 ≈ 256 KB, with headroom). */
+/** Upper bound on a stored **image** RGBA blob (256×256×4 ≈ 256 KB, with headroom). */
 export const MEDIA_MAX_BYTES = MEDIA_MAX_EDGE * MEDIA_MAX_EDGE * 4;
 
-export interface MediaMeta {
+export type MediaKind = 'image' | 'video';
+
+interface MediaMetaBase {
+  kind: MediaKind;
+  /** Stored (downscaled) pixel size. */
   width: number;
   height: number;
   filename: string;
   createdAt: string;
 }
 
-export interface MediaAsset extends MediaMeta {
+export interface ImageMeta extends MediaMetaBase {
+  kind: 'image';
+}
+
+export interface VideoMeta extends MediaMetaBase {
+  kind: 'video';
+  fps: number;
+  frameCount: number;
+  durationMs: number;
+}
+
+export type MediaMeta = ImageMeta | VideoMeta;
+
+export interface ImageAsset extends ImageMeta {
   id: string;
   /** Tightly packed RGBA, `width * height * 4` bytes. */
   data: Buffer;
 }
 
+export interface VideoAsset extends VideoMeta {
+  id: string;
+  /** Absolute path to the transcoded no-audio mp4. */
+  path: string;
+}
+
+export type MediaAsset = ImageAsset | VideoAsset;
+
 /**
- * Stores decoded, downscaled **RGBA blobs** for media layers under the data dir.
- * The browser decodes the uploaded image (it has to, for the preview) and ships
- * the raw pixels, so the server never runs an image codec — and the preview and
- * the wire sample byte-identical data.
+ * Stores media for Studio media layers under the data dir.
  *
- * Each asset is `<id>.rgba` (pixels) + `<id>.json` (dimensions + original name).
+ * **Images** (8a): the browser decodes the upload (it has to, for the preview)
+ * and ships raw downscaled RGBA, so the server runs no image codec and the
+ * preview and the wire sample byte-identical data. Stored as `<id>.rgba` +
+ * `<id>.json`.
+ *
+ * **Videos** (8b): ffmpeg transcodes the upload once to a small no-audio mp4
+ * (see `videoTranscode.ts`). That one file feeds the browser `<video>` preview
+ * and the server's in-memory frame decode. Stored as `<id>.mp4` + `<id>.json`.
  */
 export class MediaStore {
   constructor(private readonly dir: string) {}
@@ -34,57 +71,110 @@ export class MediaStore {
     if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true });
   }
 
-  private paths(id: string): { blob: string; meta: string } {
-    return { blob: join(this.dir, `${id}.rgba`), meta: join(this.dir, `${id}.json`) };
+  private metaPath(id: string): string {
+    return join(this.dir, `${id}.json`);
+  }
+  private blobPath(id: string): string {
+    return join(this.dir, `${id}.rgba`);
+  }
+  /** Path the transcoded mp4 for a video asset lives at. */
+  videoPath(id: string): string {
+    return join(this.dir, `${id}.mp4`);
   }
 
-  /** Store a new RGBA blob, returning its generated id. */
-  create(data: Buffer, meta: { width: number; height: number; filename: string }): MediaAsset {
+  private newId(): string {
+    return randomBytes(9).toString('base64url');
+  }
+
+  /** Store a new decoded **image** RGBA blob, returning its generated id. */
+  createImage(
+    data: Buffer,
+    meta: { width: number; height: number; filename: string },
+  ): ImageAsset {
     if (data.length !== meta.width * meta.height * 4) {
       throw new Error(
         `RGBA length ${data.length} ≠ ${meta.width}×${meta.height}×4 (${meta.width * meta.height * 4})`,
       );
     }
     this.ensureDir();
-    const id = randomBytes(9).toString('base64url');
-    const record: MediaMeta = {
+    const id = this.newId();
+    const record: ImageMeta = {
+      kind: 'image',
       width: meta.width,
       height: meta.height,
       filename: meta.filename.slice(0, 200),
       createdAt: new Date().toISOString(),
     };
-    const { blob, meta: metaPath } = this.paths(id);
-    writeFileSync(blob, data);
-    writeFileSync(metaPath, JSON.stringify(record));
+    writeFileSync(this.blobPath(id), data);
+    writeFileSync(this.metaPath(id), JSON.stringify(record));
     return { id, data, ...record };
   }
 
+  /**
+   * Store a new **video** asset: move the already-transcoded mp4 at
+   * `transcodedMp4Path` into the store and write its meta.
+   */
+  createVideo(
+    transcodedMp4Path: string,
+    meta: {
+      width: number;
+      height: number;
+      filename: string;
+      fps: number;
+      frameCount: number;
+      durationMs: number;
+    },
+  ): VideoAsset {
+    this.ensureDir();
+    const id = this.newId();
+    const record: VideoMeta = {
+      kind: 'video',
+      width: meta.width,
+      height: meta.height,
+      filename: meta.filename.slice(0, 200),
+      createdAt: new Date().toISOString(),
+      fps: meta.fps,
+      frameCount: meta.frameCount,
+      durationMs: meta.durationMs,
+    };
+    const dest = this.videoPath(id);
+    copyFileSync(transcodedMp4Path, dest);
+    writeFileSync(this.metaPath(id), JSON.stringify(record));
+    return { id, path: dest, ...record };
+  }
+
   has(id: string): boolean {
-    return existsSync(this.paths(id).blob);
+    return existsSync(this.metaPath(id));
   }
 
   get(id: string): MediaAsset | null {
-    const { blob, meta } = this.paths(id);
-    if (!existsSync(blob) || !existsSync(meta)) return null;
+    if (!existsSync(this.metaPath(id))) return null;
+    let record: MediaMeta;
     try {
-      const record = JSON.parse(readFileSync(meta, 'utf8')) as MediaMeta;
-      return { id, data: readFileSync(blob), ...record };
+      record = JSON.parse(readFileSync(this.metaPath(id), 'utf8')) as MediaMeta;
     } catch {
       return null;
     }
+    if (record.kind === 'video') {
+      const path = this.videoPath(id);
+      if (!existsSync(path)) return null;
+      return { id, path, ...record };
+    }
+    if (!existsSync(this.blobPath(id))) return null;
+    return { id, data: readFileSync(this.blobPath(id)), ...record };
   }
 
   /** Ids of every stored asset. */
   list(): string[] {
     if (!existsSync(this.dir)) return [];
     return readdirSync(this.dir)
-      .filter((n) => n.endsWith('.rgba'))
-      .map((n) => n.slice(0, -'.rgba'.length));
+      .filter((n) => n.endsWith('.json'))
+      .map((n) => n.slice(0, -'.json'.length));
   }
 
   remove(id: string): void {
-    const { blob, meta } = this.paths(id);
-    rmSync(blob, { force: true });
-    rmSync(meta, { force: true });
+    rmSync(this.metaPath(id), { force: true });
+    rmSync(this.blobPath(id), { force: true });
+    rmSync(this.videoPath(id), { force: true });
   }
 }

@@ -32,6 +32,10 @@ ENV EWC_WEB_DIR=/app/packages/web/dist
 ENV EWC_PORT=8080
 WORKDIR /app
 
+# ffmpeg + ffprobe: transcode uploaded Studio video media layers to a small
+# no-audio mp4 and decode its frames for the DDP wire (milestone 8b).
+RUN apk add --no-cache ffmpeg
+
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/packages/core/dist ./packages/core/dist

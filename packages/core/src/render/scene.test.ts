@@ -10,6 +10,7 @@ import {
   makeMediaLayer,
   sampleScene,
   unknownEffectIds,
+  videoFrameIndex,
   type MediaFrame,
   type Scene,
 } from './scene.js';
@@ -289,5 +290,22 @@ describe('media layers', () => {
     expect(r.h).toBeCloseTo(1 / 2.25);
     expect(r.x).toBeCloseTo(0);
     expect(r.y).toBeCloseTo((1 - 1 / 2.25) / 2);
+  });
+});
+
+describe('videoFrameIndex', () => {
+  it('advances one frame per 1/fps second and wraps at frameCount', () => {
+    expect(videoFrameIndex(0, 20, 100)).toBe(0);
+    expect(videoFrameIndex(50, 20, 100)).toBe(1); // 0.05 s * 20 fps
+    expect(videoFrameIndex(999, 20, 100)).toBe(19);
+    expect(videoFrameIndex(5000, 20, 100)).toBe(0); // 100 frames → wrap
+    expect(videoFrameIndex(5050, 20, 100)).toBe(1);
+  });
+
+  it('is defensive about degenerate inputs', () => {
+    expect(videoFrameIndex(1234, 20, 0)).toBe(0);
+    expect(videoFrameIndex(1234, 0, 100)).toBe(0);
+    expect(videoFrameIndex(-100, 20, 100)).toBe(0);
+    expect(videoFrameIndex(Number.NaN, 20, 100)).toBe(0);
   });
 });

@@ -1,6 +1,7 @@
 import {
   mapInstallation,
   sampleScene,
+  videoFrameIndex,
   type Installation,
   type MappedLed,
   type MediaFrame,
@@ -8,30 +9,98 @@ import {
 } from '@ewc/core';
 import type { FrameProducer } from '../realtime/ddpSender.js';
 import type { MediaStore } from '../media/mediaStore.js';
+import { getDecodedVideo } from '../media/videoCache.js';
 import { log } from '../logger.js';
 
+/** A view of one frame of a decoded video, or a still image, keyed by layer id. */
+interface VideoLayerState {
+  fps: number;
+  frameCount: number;
+  width: number;
+  height: number;
+  /** `frameCount * width * height * 4` RGBA bytes; null until the decode lands. */
+  data: Uint8ClampedArray | null;
+}
+
 /**
- * Load the current frame for every media layer in `scene` from the store. For
- * 8a (images) this is a still frame loaded once when the producer is built; 8b
- * (video) will make this time-varying.
+ * Resolves the current {@link MediaFrame} for every media layer in a scene at a
+ * given wall-clock time. Images are loaded once here; videos are decoded by the
+ * process-wide cache ({@link getDecodedVideo}) — **not** in this function — so
+ * rebuilding the producer on every scene edit stays cheap.
  */
-function loadMediaFrames(scene: Scene, media: MediaStore | undefined): Map<string, MediaFrame> {
-  const frames = new Map<string, MediaFrame>();
-  if (!media) return frames;
-  for (const layer of scene.layers) {
-    if (!layer.media) continue;
-    const asset = media.get(layer.media.assetId);
-    if (!asset) {
-      log.warn(`scene: media asset ${layer.media.assetId} for layer ${layer.id} not found`);
-      continue;
+function buildMediaProvider(scene: Scene, media: MediaStore | undefined) {
+  const images = new Map<string, MediaFrame>();
+  const videos = new Map<string, VideoLayerState>();
+
+  if (media) {
+    for (const layer of scene.layers) {
+      if (!layer.media) continue;
+      const asset = media.get(layer.media.assetId);
+      if (!asset) {
+        log.warn(`scene: media asset ${layer.media.assetId} for layer ${layer.id} not found`);
+        continue;
+      }
+      if (asset.kind === 'image') {
+        images.set(layer.id, {
+          width: asset.width,
+          height: asset.height,
+          data: new Uint8ClampedArray(asset.data.buffer, asset.data.byteOffset, asset.data.length),
+        });
+      } else {
+        const st: VideoLayerState = {
+          fps: asset.fps,
+          frameCount: asset.frameCount,
+          width: asset.width,
+          height: asset.height,
+          data: null,
+        };
+        videos.set(layer.id, st);
+        getDecodedVideo({
+          assetId: asset.id,
+          path: media.videoPath(asset.id),
+          width: asset.width,
+          height: asset.height,
+        })
+          .then((d) => {
+            st.data = d.data;
+            st.frameCount = d.frameCount;
+          })
+          .catch(() => {
+            /* videoCache already logged; the layer just stays dark */
+          });
+      }
     }
-    frames.set(layer.id, {
-      width: asset.width,
-      height: asset.height,
-      data: new Uint8ClampedArray(asset.data.buffer, asset.data.byteOffset, asset.data.length),
-    });
   }
-  return frames;
+
+  let cachedAtMs = Number.NaN;
+  let cached: Map<string, MediaFrame> = images;
+
+  return {
+    /** Frames for all media layers at `tMs`. Memoised within a tick (all devices
+     *  in one tick share the time), so the per-device producer calls are free. */
+    frameAt(tMs: number): Map<string, MediaFrame> {
+      if (tMs === cachedAtMs) return cached;
+      if (videos.size === 0) {
+        cachedAtMs = tMs;
+        cached = images;
+        return images;
+      }
+      const out = new Map(images);
+      for (const [layerId, v] of videos) {
+        if (!v.data || v.frameCount <= 0) continue;
+        const idx = videoFrameIndex(tMs, v.fps, v.frameCount);
+        const stride = v.width * v.height * 4;
+        out.set(layerId, {
+          width: v.width,
+          height: v.height,
+          data: new Uint8ClampedArray(v.data.buffer, v.data.byteOffset + idx * stride, stride),
+        });
+      }
+      cachedAtMs = tMs;
+      cached = out;
+      return out;
+    },
+  };
 }
 
 /**
@@ -39,9 +108,9 @@ function loadMediaFrames(scene: Scene, media: MediaStore | undefined): Map<strin
  * DDP sender. The mapped LED list is partitioned by device **once**, so each tick
  * evaluates `sampleScene` exactly once per LED (never per target).
  *
- * The installation and any media frames are snapshotted here — call again and
- * swap the producer (`DdpSender.setProducer`) when fixtures, the scene, or a
- * media asset change so the wall follows.
+ * The installation is snapshotted here; media frames are resolved per tick (a
+ * video layer advances over time). Call again and swap the producer
+ * (`DdpSender.setProducer`) when fixtures, the scene, or a media asset change.
  */
 export function sceneFrameProducer(
   scene: Scene,
@@ -58,7 +127,7 @@ export function sceneFrameProducer(
     list.push(led);
   }
 
-  const mediaFrames = loadMediaFrames(scene, media);
+  const provider = buildMediaProvider(scene, media);
 
   return (target, tMs) => {
     const bpl = target.format === 'rgbw' ? 4 : 3;
@@ -66,6 +135,7 @@ export function sceneFrameProducer(
     const leds = byDevice.get(target.deviceId);
     if (!leds) return buf;
 
+    const mediaFrames = provider.frameAt(tMs);
     const t = tMs / 1000;
     for (const led of leds) {
       const o = led.index * bpl;

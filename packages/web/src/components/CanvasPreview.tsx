@@ -11,7 +11,7 @@ import {
   type Scene,
 } from '@ewc/core';
 import { floorplanUrl } from '../api/stage.js';
-import { loadMediaFrame } from '../api/media.js';
+import { loadMediaFrame, mediaUrl } from '../api/media.js';
 import { md3 } from '../theme/tokens.js';
 
 interface Props {
@@ -92,31 +92,84 @@ export function CanvasPreview({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
 
-  // Decoded frames for the scene's media layers, keyed by layer id.
-  const [mediaFrames, setMediaFrames] = useState<Map<string, MediaFrame>>(() => new Map());
-  const mediaKey = scene.layers
-    .map((l) => `${l.id}:${l.media?.assetId ?? ''}`)
+  // Still frames for the scene's IMAGE media layers, keyed by layer id.
+  const [mediaImages, setMediaImages] = useState<Map<string, MediaFrame>>(() => new Map());
+  const imageKey = scene.layers
+    .map((l) => (l.media && l.media.kind !== 'video' ? `${l.id}:${l.media.assetId}` : ''))
     .join(',');
   useEffect(() => {
-    const specs = scene.layers.flatMap((l) => (l.media ? [[l.id, l.media.assetId] as const] : []));
+    const specs = scene.layers.flatMap((l) =>
+      l.media && l.media.kind !== 'video' ? [[l.id, l.media.assetId] as const] : [],
+    );
     if (specs.length === 0) {
-      setMediaFrames(new Map());
+      setMediaImages(new Map());
       return;
     }
     let cancelled = false;
     Promise.all(specs.map(async ([id, asset]) => [id, await loadMediaFrame(asset)] as const))
       .then((entries) => {
-        if (!cancelled) setMediaFrames(new Map(entries));
+        if (!cancelled) setMediaImages(new Map(entries));
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaKey]);
+  }, [imageKey]);
 
-  const state = useRef({ scene, installation, playing, showFixtures, epochMs, deviceGains, mediaFrames });
-  state.current = { scene, installation, playing, showFixtures, epochMs, deviceGains, mediaFrames };
+  // Playing <video> elements for VIDEO media layers, keyed by layer id. Kept in a
+  // ref (not state) — the render loop samples them directly each frame.
+  const videosRef = useRef<
+    Map<string, { assetId: string; el: HTMLVideoElement; canvas: HTMLCanvasElement }>
+  >(new Map());
+  const videoKey = scene.layers
+    .map((l) => (l.media?.kind === 'video' ? `${l.id}:${l.media.assetId}` : ''))
+    .join(',');
+  useEffect(() => {
+    const want = new Map(
+      scene.layers.flatMap((l) =>
+        l.media?.kind === 'video' ? [[l.id, l.media.assetId] as const] : [],
+      ),
+    );
+    const have = videosRef.current;
+    // Drop layers that are gone or changed asset.
+    for (const [id, v] of have) {
+      if (want.get(id) !== v.assetId) {
+        v.el.pause();
+        v.el.removeAttribute('src');
+        v.el.load();
+        have.delete(id);
+      }
+    }
+    // Add new ones.
+    for (const [id, assetId] of want) {
+      if (have.has(id)) continue;
+      const el = document.createElement('video');
+      el.src = mediaUrl(assetId);
+      el.crossOrigin = 'anonymous';
+      el.muted = true;
+      el.loop = true;
+      el.playsInline = true;
+      el.preload = 'auto';
+      void el.play().catch(() => {});
+      have.set(id, { assetId, el, canvas: document.createElement('canvas') });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoKey]);
+  useEffect(
+    () => () => {
+      for (const v of videosRef.current.values()) {
+        v.el.pause();
+        v.el.removeAttribute('src');
+        v.el.load();
+      }
+      videosRef.current.clear();
+    },
+    [],
+  );
+
+  const state = useRef({ scene, installation, playing, showFixtures, epochMs, deviceGains, mediaImages });
+  state.current = { scene, installation, playing, showFixtures, epochMs, deviceGains, mediaImages };
   const drag = useRef<
     | { id: string; mode: 'move' | Corner; startRect: LayerRect; px: number; py: number }
     | null
@@ -158,10 +211,43 @@ export function CanvasPreview({
           ? (Date.now() - s.epochMs) / 1000
           : (now - start) / 1000;
 
+      // Merge the current frame of every playing <video> layer over the still
+      // images. Sampled from the same transcoded clip the wire decodes.
+      let mediaFrames = s.mediaImages;
+      if (videosRef.current.size > 0) {
+        mediaFrames = new Map(s.mediaImages);
+        for (const [layerId, v] of videosRef.current) {
+          const vid = v.el;
+          if (vid.readyState < 2 || !vid.videoWidth) continue;
+          // Nudge toward the wall clock when streaming, without constant seeking.
+          if (s.playing && s.epochMs != null && vid.duration > 0) {
+            const wanted = ((Date.now() - s.epochMs) / 1000) % vid.duration;
+            if (Math.abs(vid.currentTime - wanted) > 0.15) vid.currentTime = wanted;
+          }
+          if (vid.paused && s.playing) void vid.play().catch(() => {});
+          const vc = v.canvas;
+          if (vc.width !== vid.videoWidth || vc.height !== vid.videoHeight) {
+            vc.width = vid.videoWidth;
+            vc.height = vid.videoHeight;
+          }
+          const vctx = vc.getContext('2d', { willReadFrequently: true });
+          if (!vctx) continue;
+          try {
+            vctx.drawImage(vid, 0, 0, vc.width, vc.height);
+            const id = vctx.getImageData(0, 0, vc.width, vc.height);
+            const copy = new Uint8ClampedArray(id.data.length);
+            copy.set(id.data);
+            mediaFrames.set(layerId, { width: vc.width, height: vc.height, data: copy });
+          } catch {
+            /* frame not ready / tainted — skip this tick */
+          }
+        }
+      }
+
       const data = img.data;
       for (let py = 0; py < h; py++) {
         for (let px = 0; px < w; px++) {
-          const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t, s.mediaFrames);
+          const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t, mediaFrames);
           const o = (py * w + px) * 4;
           data[o] = c[0];
           data[o + 1] = c[1];
@@ -176,7 +262,7 @@ export function CanvasPreview({
         // balance applied — the one place the preview can reflect a per-device
         // correction (the shared canvas can't carry three white points).
         for (const led of mapInstallation(s.installation)) {
-          const c = sampleScene(s.scene, led.x, led.y, t, s.mediaFrames);
+          const c = sampleScene(s.scene, led.x, led.y, t, mediaFrames);
           const g = s.deviceGains?.[led.deviceId];
           const r = g ? c[0] * g[0] : c[0];
           const gr = g ? c[1] * g[1] : c[1];

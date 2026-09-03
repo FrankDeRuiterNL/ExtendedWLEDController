@@ -18,6 +18,7 @@ const rect = z.object({
 const media = z.object({
   assetId: z.string().min(1).max(64),
   filename: z.string().max(200),
+  kind: z.enum(['image', 'video']).optional(),
   naturalWidth: z.number().positive(),
   naturalHeight: z.number().positive(),
 });

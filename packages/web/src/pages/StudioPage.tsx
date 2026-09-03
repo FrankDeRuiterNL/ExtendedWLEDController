@@ -13,6 +13,7 @@ import {
   DialogTitle,
   Divider,
   IconButton,
+  LinearProgress,
   Menu,
   MenuItem,
   Stack,
@@ -147,6 +148,7 @@ function MediaLayerInspector({
   const upload = useUploadMedia();
   const fileInput = useRef<HTMLInputElement>(null);
   const media = layer.media ?? null;
+  const isVideo = media?.kind === 'video';
 
   const pick = () => fileInput.current?.click();
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -154,6 +156,8 @@ function MediaLayerInspector({
     e.target.value = '';
     if (f) upload.mutate(f, { onSuccess: onUploaded });
   };
+
+  const pct100 = Math.round(upload.progress * 100);
 
   return (
     <Card>
@@ -171,7 +175,7 @@ function MediaLayerInspector({
           <input
             ref={fileInput}
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
+            accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime"
             hidden
             onChange={onFile}
           />
@@ -179,9 +183,9 @@ function MediaLayerInspector({
           {media ? (
             <Stack direction="row" spacing={1.5} alignItems="center">
               <Box
-                component="img"
+                component={isVideo ? 'video' : 'img'}
                 src={mediaUrl(media.assetId)}
-                alt=""
+                {...(isVideo ? { muted: true, loop: true, autoPlay: true, playsInline: true } : { alt: '' })}
                 sx={{
                   width: 64,
                   height: 64,
@@ -196,24 +200,34 @@ function MediaLayerInspector({
                   {media.filename}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
+                  {isVideo ? 'Video · ' : ''}
                   {media.naturalWidth}×{media.naturalHeight}
                 </Typography>
                 <Button size="small" onClick={pick} disabled={upload.isPending} sx={{ display: 'block', mt: 0.5 }}>
-                  {upload.isPending ? 'Uploading…' : 'Replace image'}
+                  {upload.isPending ? 'Uploading…' : isVideo ? 'Replace video' : 'Replace media'}
                 </Button>
               </Box>
             </Stack>
           ) : (
             <Button variant="outlined" onClick={pick} disabled={upload.isPending}>
-              {upload.isPending ? 'Uploading…' : 'Upload image'}
+              {upload.isPending ? 'Uploading…' : 'Upload image or video'}
             </Button>
+          )}
+          {upload.isPending && upload.progress > 0 && (
+            <Box>
+              <LinearProgress variant="determinate" value={pct100} />
+              <Typography variant="caption" color="text.secondary">
+                Uploading video… {pct100}% — transcoding starts when the upload finishes.
+              </Typography>
+            </Box>
           )}
           {upload.isError && (
             <Alert severity="error">{(upload.error as Error).message}</Alert>
           )}
           <Typography variant="caption" color="text.secondary">
-            Fixtures under the box take their colour from the image. `.mp4` / `.mov` video, trim and
-            playback come in a later update. Re-upload to change the stored resolution.
+            {isVideo
+              ? 'The clip loops continuously. Trim points and play / pause / stop controls come in the next update.'
+              : 'Fixtures under the box take their colour from the media. Images are still; upload an .mp4 / .mov for motion.'}
           </Typography>
 
           <Divider>
@@ -270,7 +284,7 @@ function MediaLayerInspector({
                 onPatch({ rect: fitMediaRect(media.naturalWidth, media.naturalHeight, canvas) })
               }
             >
-              Reset box to image aspect
+              Reset box to {isVideo ? 'video' : 'image'} aspect
             </Button>
           )}
         </Stack>
@@ -383,6 +397,7 @@ export function StudioPage() {
       media: {
         assetId: m.assetId,
         filename: m.filename,
+        kind: m.kind ?? 'image',
         naturalWidth: m.naturalWidth,
         naturalHeight: m.naturalHeight,
       },
@@ -692,7 +707,7 @@ export function StudioPage() {
               {scene.layers.length === 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                   No layers. <b>FX Layer</b> is a plain solid you can change below; <b>Media Layer</b>{' '}
-                  maps an image onto the fixtures under it.
+                  maps an image or video onto the fixtures under it.
                 </Typography>
               )}
 
@@ -705,6 +720,7 @@ export function StudioPage() {
                     (l.media !== undefined
                       ? l.media?.filename || 'Media layer'
                       : def?.name || l.effectId);
+                  const mediaTag = l.media?.kind === 'video' ? ' · video' : l.media !== undefined ? ' · image' : '';
                   return (
                     <Stack
                       key={l.id}
@@ -730,7 +746,7 @@ export function StudioPage() {
                       <Typography variant="body2" sx={{ flex: 1 }} noWrap>
                         {label}
                         <Typography component="span" variant="caption" color="text.secondary">
-                          {l.media !== undefined && ' · media'}
+                          {mediaTag}
                           {` · ${pct(l.opacity)}%`}
                           {l.blend !== 'normal' && ` · ${l.blend}`}
                         </Typography>

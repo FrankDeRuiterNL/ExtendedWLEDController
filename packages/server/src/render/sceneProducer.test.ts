@@ -33,7 +33,7 @@ describe('sceneFrameProducer — media layers', () => {
 
   it('maps media pixels onto the fixture LEDs on the wire', () => {
     // 2×1 image: left red, right green
-    const asset = media.create(
+    const asset = media.createImage(
       Buffer.from([255, 0, 0, 255, 0, 255, 0, 255]),
       { width: 2, height: 1, filename: 'lr.png' },
     );

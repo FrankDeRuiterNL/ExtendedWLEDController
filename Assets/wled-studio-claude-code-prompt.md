@@ -455,15 +455,24 @@ strips that have no dedicated white channel:
 
 ### Media layers in Studio — image / video pixel-mapping (milestone 8)
 
-> **Status — 2026-09-03: increment 8a DONE (v0.9.0) — images only.**
-> Shipped: FX Layer / Media Layer choice on "+ Add", image upload
+> **Status — 2026-09-03: increments 8a + 8b DONE (v0.10.0).**
+> 8a (v0.9.0): FX Layer / Media Layer choice on "+ Add", image upload
 > (browser-decoded + downscaled to ≤256 px, raw RGBA to the server — no
 > server-side image codec), pixel-mapping onto fixtures on both the preview
 > and the wire, aspect-locked region box, scene save/load of the asset ref.
-> **Deferred to 8b:** video (`.mp4`/`.mov`, 500 MB streamed to disk), ffmpeg
-> transcode in the container, Trim Duration, Playback Type, Playback Controls,
-> `epochMs` phase-lock for the media head. **Also deferred:** orphan-asset GC —
-> discarded images accumulate under `/data/media` (≤256 KB each).
+> 8b (v0.10.0): **video** — `.mp4` / `.mov` streamed to a temp file on the data
+> volume, ffmpeg (`apk add ffmpeg` in the container) transcodes it to a small
+> no-audio H.264 mp4 (≤128 px long edge, 20 fps, first 90 s). One artifact
+> feeds both consumers: the browser plays it in a hidden `<video>` for the
+> preview, the server decodes it once to an in-memory RGBA frame buffer
+> (process-wide cache, keyed by asset id, survives producer hot-swap) for the
+> wire. The clip **loops continuously** — `videoFrameIndex(tMs, fps, count)` off
+> the stream's `epochMs`. Preview `<video>` is nudged toward the wall clock when
+> streaming (±150 ms threshold, so it can sit ~3 frames off — fine for a loop).
+> **Deferred to 8c:** Trim Duration, Playback Type (hold-last-frame /
+> hide-when-stopped / loop), Playback Controls (play/pause/stop/loop), tight
+> preview phase-lock. **Also deferred:** orphan-asset GC — discarded media
+> accumulates under `/data/media`; the 501 branch (no ffmpeg) is untested.
 
 Today every Studio layer is an effect. Split the layer type in two. The Studio
 **"+ Add"** button opens a small choice — **FX Layer** or **Media Layer** —
