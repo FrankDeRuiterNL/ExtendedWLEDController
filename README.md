@@ -18,7 +18,9 @@ Single Docker container, Node 22 + TypeScript throughout. Single user, no auth
 | 4 | Render engine + effects (layers, scenes, preview) | ✅ |
 | 5 | Pixel painter (live DDP stream) + Pixel Scenes | ✅ |
 | **6** | **Bake service (single-frame GIF → preset)** | **✅ this build** |
-| 7 | Polish (health, fps, DNRGB fallback, per-device white balance, floorplan overlay, fixture shapes) | — |
+| 7 | Polish (health, fps, DNRGB fallback, per-device white balance, floorplan overlay) | — |
+
+_Layout fixture shapes + on-canvas resize landed early (v0.5.0) — see below._
 
 ### What milestone 1 does
 
@@ -159,6 +161,23 @@ Single Docker container, Node 22 + TypeScript throughout. Single user, no auth
   palette was not selectable via `seg.pal` on Frank's QuinLED build (see the spec
   note). The single-frame GIF is the reliable static bake; animated-GIF-from-scene
   is a milestone-6 follow-up.
+
+### Fixture shapes + resize (v0.5.0)
+
+- Each fixture picks a **shape** its LEDs lay along: strip, matrix, or a preset
+  outline — **line, rectangle, square, triangle, diamond, circle** — or a
+  **custom** path. Preset outlines distribute the fixture's LED count evenly along
+  the path (closed for the polygons/circle, open for line); square/diamond/circle
+  lock the fixture's box to 1:1.
+- **Custom shape**: click (or right-click) on the Layout canvas to drop vertices —
+  the first is LED 0, the LEDs then run point to point. Press **Enter** to finish
+  it as an open line/curve; click back **on point 0** to close it into a loop.
+  **Esc** cancels. The drawn box becomes the fixture's position + size.
+- **Resize on the canvas**: a selected fixture shows four corner handles — drag to
+  resize (symmetric about the centre; aspect-locked for square shapes; correct
+  under rotation). The inspector still has numeric width/height.
+- Everything flows through the one `fixtureLocalPositions` mapper, so the Studio
+  preview and the DDP stream pick shapes up unchanged.
 
 ### Test against real hardware
 

@@ -8,7 +8,14 @@
  */
 
 import type { PixelFormat } from '../ddp/packet.js';
-import type { Fixture, FixtureGeometry, Installation, MatrixOrigin, Vec2 } from './model.js';
+import type {
+  Fixture,
+  FixtureGeometry,
+  FixtureShape,
+  Installation,
+  MatrixOrigin,
+  Vec2,
+} from './model.js';
 
 export interface MappedLed {
   deviceId: number;
@@ -69,6 +76,76 @@ function applyOrigin(
   }
 }
 
+// --- shape outlines -------------------------------------------------
+
+/** Vertices (unit box) of a preset/custom shape, plus whether the path is closed. */
+export function shapeOutline(shape: FixtureShape): { verts: Vec2[]; closed: boolean } {
+  if (shape.type === 'custom') {
+    const verts = shape.points.map((p) => ({ x: p.x, y: p.y }));
+    return { verts, closed: !!shape.closed && verts.length >= 3 };
+  }
+  switch (shape.type) {
+    case 'line':
+      return { verts: [{ x: 0, y: 0.5 }, { x: 1, y: 0.5 }], closed: false };
+    case 'rectangle':
+    case 'square':
+      return { verts: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }], closed: true };
+    case 'triangle':
+      return { verts: [{ x: 0.5, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }], closed: true };
+    case 'diamond':
+      return {
+        verts: [{ x: 0.5, y: 0 }, { x: 1, y: 0.5 }, { x: 0.5, y: 1 }, { x: 0, y: 0.5 }],
+        closed: true,
+      };
+    case 'circle': {
+      // A fine polygon; distribution then spaces LEDs evenly along it.
+      const seg = 96;
+      const verts = Array.from({ length: seg }, (_, i) => {
+        const a = -Math.PI / 2 + (i / seg) * Math.PI * 2;
+        return { x: 0.5 + 0.5 * Math.cos(a), y: 0.5 + 0.5 * Math.sin(a) };
+      });
+      return { verts, closed: true };
+    }
+  }
+}
+
+const dist2 = (a: Vec2, b: Vec2) => Math.hypot(a.x - b.x, a.y - b.y);
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/** `n` points spaced evenly along the polyline through `verts`. */
+export function distributeAlongPath(verts: readonly Vec2[], n: number, closed: boolean): Vec2[] {
+  if (n <= 0) return [];
+  const first = verts[0] ?? { x: 0.5, y: 0.5 };
+  if (verts.length < 2 || n === 1) return Array.from({ length: n }, () => ({ ...first }));
+
+  const pts = closed ? [...verts, first] : [...verts];
+  const segLen: number[] = [];
+  let total = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const d = dist2(pts[i]!, pts[i + 1]!);
+    segLen.push(d);
+    total += d;
+  }
+  if (total === 0) return Array.from({ length: n }, () => ({ ...first }));
+
+  const step = closed ? total / n : total / (n - 1);
+  const out: Vec2[] = [];
+  for (let k = 0; k < n; k++) {
+    const target = !closed && k === n - 1 ? total : k * step;
+    let acc = 0;
+    let si = 0;
+    while (si < segLen.length - 1 && acc + segLen[si]! < target) {
+      acc += segLen[si]!;
+      si++;
+    }
+    const t = segLen[si]! > 0 ? (target - acc) / segLen[si]! : 0;
+    const a = pts[si]!;
+    const b = pts[si + 1]!;
+    out.push({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) });
+  }
+  return out;
+}
+
 /** Local unit-box coordinates (0..1) for every LED of a fixture, in wire order. */
 export function fixtureLocalPositions(g: FixtureGeometry): Vec2[] {
   switch (g.kind) {
@@ -78,6 +155,11 @@ export function fixtureLocalPositions(g: FixtureGeometry): Vec2[] {
         x: n > 1 ? i / (n - 1) : 0.5,
         y: 0.5,
       }));
+    }
+    case 'shape': {
+      const n = Math.max(0, Math.floor(g.count));
+      const { verts, closed } = shapeOutline(g.shape);
+      return distributeAlongPath(verts, n, closed);
     }
     case 'matrix': {
       const w = Math.max(1, Math.floor(g.width));

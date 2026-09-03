@@ -479,7 +479,18 @@ above).
 - Store the image where device/GIF uploads go; the installation JSON keeps the
   filename + the floorplan's transform (position, scale) + natural dimensions.
 
-### Fixture shapes on the layout canvas (later milestone)
+### Fixture shapes on the layout canvas — DONE (v0.5.0)
+
+Implemented: new `shape` geometry kind (`line/rectangle/square/triangle/diamond/
+circle` + `custom`), LEDs distributed along the outline via `fixtureLocalPositions`;
+custom shapes are **open by default** (LED 0 → last vertex) and only close into a
+loop when the user clicks back on point 0 while drawing; on-canvas corner-handle
+resize (aspect-locked for square/diamond/circle, rotation-correct). Original spec
+below.
+
+---
+
+### Fixture shapes on the layout canvas (original plan)
 
 Right now a fixture's geometry is strip / matrix with serpentine + origin. Add a
 **shape** the fixture's LEDs are laid out along on the canvas:

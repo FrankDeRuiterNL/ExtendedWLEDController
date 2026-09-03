@@ -23,6 +23,21 @@ export interface Vec2 {
 
 export type MatrixOrigin = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
+/** Preset outlines a shaped fixture's LEDs are laid along. */
+export type ShapeKind = 'line' | 'rectangle' | 'square' | 'triangle' | 'diamond' | 'circle';
+
+/**
+ * The path a shaped fixture's LEDs follow, in the fixture's own 0..1 unit box.
+ * `line` is an open path (LED 0 at one end, last LED at the other); the other
+ * presets are closed. A `custom` path is **open by default** (LED 0 at the first
+ * vertex, last LED at the last) and only closed when `closed` is set — the user
+ * clicked back on the first point while drawing.
+ */
+export type FixtureShape =
+  | { type: ShapeKind }
+  /** `points` are ordered vertices in the unit box; LED 0 sits at `points[0]`. */
+  | { type: 'custom'; points: Vec2[]; closed?: boolean };
+
 export type FixtureGeometry =
   | { kind: 'strip'; count: number }
   | {
@@ -40,7 +55,21 @@ export type FixtureGeometry =
       kind: 'points';
       /** Local coordinates, each component 0..1 within the fixture's own box. */
       points: Vec2[];
+    }
+  | {
+      /** `count` LEDs distributed evenly along `shape`'s outline. */
+      kind: 'shape';
+      count: number;
+      shape: FixtureShape;
     };
+
+/** Shape presets whose bounding box must stay 1:1 (the transform size is locked square). */
+export const SQUARE_SHAPES: ReadonlySet<ShapeKind> = new Set(['square', 'diamond', 'circle']);
+
+/** True when a shaped geometry should keep a 1:1 transform size. */
+export function shapeIsSquare(g: FixtureGeometry): boolean {
+  return g.kind === 'shape' && g.shape.type !== 'custom' && SQUARE_SHAPES.has(g.shape.type);
+}
 
 export interface FixtureTransform {
   /** Centre of the fixture on the canvas, in canvas units. */
@@ -81,6 +110,8 @@ export function fixtureLedCount(g: FixtureGeometry): number {
       return Math.max(0, Math.floor(g.width) * Math.floor(g.height));
     case 'points':
       return g.points.length;
+    case 'shape':
+      return Math.max(0, Math.floor(g.count));
   }
 }
 

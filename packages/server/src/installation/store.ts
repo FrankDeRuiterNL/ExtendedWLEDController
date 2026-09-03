@@ -4,6 +4,12 @@ import type { Db } from '../db/index.js';
 
 const vec2 = z.object({ x: z.number(), y: z.number() });
 
+const shapeKind = z.enum(['line', 'rectangle', 'square', 'triangle', 'diamond', 'circle']);
+const fixtureShape = z.union([
+  z.object({ type: shapeKind }),
+  z.object({ type: z.literal('custom'), points: z.array(vec2).min(2).max(512), closed: z.boolean().optional() }),
+]);
+
 const geometry = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('strip'), count: z.number().int().min(0).max(65536) }),
   z.object({
@@ -15,6 +21,11 @@ const geometry = z.discriminatedUnion('kind', [
     columnMajor: z.boolean().optional(),
   }),
   z.object({ kind: z.literal('points'), points: z.array(vec2).max(65536) }),
+  z.object({
+    kind: z.literal('shape'),
+    count: z.number().int().min(0).max(65536),
+    shape: fixtureShape,
+  }),
 ]);
 
 const fixture = z.object({

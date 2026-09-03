@@ -23,9 +23,13 @@ import SaveIcon from '@mui/icons-material/Save';
 import {
   fixtureLedCount,
   mapFixture,
+  shapeIsSquare,
   type Fixture,
   type FixtureGeometry,
+  type FixtureShape,
   type Installation,
+  type ShapeKind,
+  type Vec2,
 } from '@ewc/core';
 import { useInstallation, useSaveInstallation } from '../api/stage.js';
 import { useDevices } from '../api/devices.js';
@@ -33,6 +37,17 @@ import { md3 } from '../theme/tokens.js';
 
 let idSeq = 0;
 const newId = () => `fx-${Date.now().toString(36)}-${idSeq++}`;
+
+const SHAPE_KINDS: ShapeKind[] = ['line', 'rectangle', 'square', 'triangle', 'diamond', 'circle'];
+type GeomChoice = 'strip' | 'matrix' | ShapeKind | 'custom';
+
+/** Rotate (x,y) by `deg` about the origin. */
+function rot(x: number, y: number, deg: number): Vec2 {
+  const r = (deg * Math.PI) / 180;
+  const c = Math.cos(r);
+  const s = Math.sin(r);
+  return { x: x * c - y * s, y: x * s + y * c };
+}
 
 function defaultGeometry(kind: FixtureGeometry['kind'], leds: number): FixtureGeometry {
   if (kind === 'matrix') {
@@ -125,12 +140,33 @@ export function LayoutPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
+  /** Active custom-shape drawing: fixture + vertices so far (CANVAS units) + whether the path loops. */
+  const [draw, setDraw] = useState<{ id: string; points: Vec2[]; closed: boolean } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const resize = useRef<
+    | { id: string; rotationDeg: number; center: Vec2; lockAspect: boolean }
+    | null
+  >(null);
+  const drawActions = useRef({ commit: () => {}, cancel: () => {} });
 
   useEffect(() => {
-    if (saved && !dirty) setInst(saved);
-  }, [saved, dirty]);
+    if (saved && !dirty && !draw) setInst(saved);
+  }, [saved, dirty, draw]);
+
+  useEffect(() => {
+    if (!draw) return;
+    // Drop focus from whatever control started the draw (e.g. the Shape select)
+    // so it can't swallow Enter/Escape.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); drawActions.current.commit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); drawActions.current.cancel(); }
+    };
+    // Capture phase so it beats any focused widget's own key handling.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [draw]);
 
   const deviceOpts = useMemo(
     () => (devices ?? []).map((d) => ({ id: d.id, name: d.name, ledCount: d.ledCount })),
@@ -151,34 +187,158 @@ export function LayoutPage() {
     if (f) patchFixture(id, { transform: { ...f.transform, ...t } });
   };
 
-  const toCanvas = (evt: React.PointerEvent): { x: number; y: number } => {
-    const svg = svgRef.current!;
-    const rect = svg.getBoundingClientRect();
-    return {
-      x: ((evt.clientX - rect.left) / rect.width) * inst.canvas.width,
-      y: ((evt.clientY - rect.top) / rect.height) * inst.canvas.height,
-    };
+  /** Switch a fixture's geometry to a strip / matrix / preset shape / custom draw. */
+  const setGeomChoice = (id: string, choice: GeomChoice) => {
+    const f = inst.fixtures.find((x) => x.id === id);
+    if (!f) return;
+    const count = Math.max(1, fixtureLedCount(f.geometry));
+
+    if (choice === 'strip') {
+      patchFixture(id, { geometry: { kind: 'strip', count } });
+      return;
+    }
+    if (choice === 'matrix') {
+      const w = Math.max(1, Math.round(Math.sqrt(count)));
+      patchFixture(id, {
+        geometry: { kind: 'matrix', width: w, height: Math.max(1, Math.ceil(count / w)), serpentine: true, origin: 'top-left' },
+      });
+      return;
+    }
+    if (choice === 'custom') {
+      // Seed the draw with any existing custom vertices, projected back to canvas
+      // space through the fixture's current transform.
+      let existing: Vec2[] = [];
+      if (f.geometry.kind === 'shape' && f.geometry.shape.type === 'custom') {
+        const t = f.transform;
+        existing = f.geometry.shape.points.map((p) => {
+          const r = rot((p.x - 0.5) * t.size.x, (p.y - 0.5) * t.size.y, t.rotationDeg);
+          return { x: t.position.x + r.x, y: t.position.y + r.y };
+        });
+      }
+      setSelectedId(id);
+      setDraw({
+        id,
+        points: existing,
+        closed: f.geometry.kind === 'shape' && f.geometry.shape.type === 'custom' && !!f.geometry.shape.closed,
+      });
+      return;
+    }
+    // preset shape
+    const geometry: FixtureGeometry = { kind: 'shape', count, shape: { type: choice } };
+    const patch: Partial<Fixture> = { geometry };
+    if (shapeIsSquare(geometry)) {
+      const s = Math.max(f.transform.size.x, f.transform.size.y);
+      patch.transform = { ...f.transform, size: { x: s, y: s } };
+    }
+    patchFixture(id, patch);
   };
 
+  const commitDrawWith = (points: Vec2[], closed: boolean) => {
+    if (!draw) return;
+    const f = inst.fixtures.find((x) => x.id === draw.id);
+    if (f && points.length >= 2) {
+      // Fit an axis-aligned box around the drawn (canvas-space) vertices; the
+      // fixture takes that box as its transform and stores the points normalised.
+      const xs = points.map((p) => p.x);
+      const ys = points.map((p) => p.y);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      const w = Math.max(0.5, Math.max(...xs) - minX);
+      const h = Math.max(0.5, Math.max(...ys) - minY);
+      const local = points.map((p) => ({ x: (p.x - minX) / w, y: (p.y - minY) / h }));
+      const count = Math.max(1, fixtureLedCount(f.geometry));
+      const shape: Extract<FixtureShape, { type: 'custom' }> = { type: 'custom', points: local };
+      if (closed && local.length >= 3) shape.closed = true;
+      patchFixture(draw.id, {
+        geometry: { kind: 'shape', count, shape },
+        transform: {
+          position: { x: minX + w / 2, y: minY + h / 2 },
+          rotationDeg: 0,
+          size: { x: round(w), y: round(h) },
+        },
+      });
+    }
+    setDraw(null);
+  };
+  const commitDraw = () => draw && commitDrawWith(draw.points, draw.closed);
+  const cancelDraw = () => setDraw(null);
+  drawActions.current = { commit: commitDraw, cancel: cancelDraw };
+
+  const toCanvasXY = (clientX: number, clientY: number): Vec2 => {
+    const rect = svgRef.current!.getBoundingClientRect();
+    return {
+      x: ((clientX - rect.left) / rect.width) * inst.canvas.width,
+      y: ((clientY - rect.top) / rect.height) * inst.canvas.height,
+    };
+  };
+  const toCanvas = (evt: { clientX: number; clientY: number }): Vec2 => toCanvasXY(evt.clientX, evt.clientY);
+
   const onFixturePointerDown = (evt: React.PointerEvent, f: Fixture) => {
+    if (draw) return;
     evt.stopPropagation();
     (evt.target as Element).setPointerCapture(evt.pointerId);
     setSelectedId(f.id);
     const p = toCanvas(evt);
     drag.current = { id: f.id, dx: f.transform.position.x - p.x, dy: f.transform.position.y - p.y };
   };
+
+  const onResizeHandleDown = (evt: React.PointerEvent, f: Fixture) => {
+    evt.stopPropagation();
+    (evt.target as Element).setPointerCapture(evt.pointerId);
+    setSelectedId(f.id);
+    resize.current = {
+      id: f.id,
+      rotationDeg: f.transform.rotationDeg,
+      center: { ...f.transform.position },
+      lockAspect: shapeIsSquare(f.geometry),
+    };
+  };
+
   const onPointerMove = (evt: React.PointerEvent) => {
-    if (!drag.current) return;
-    const p = toCanvas(evt);
-    patchTransform(drag.current.id, {
-      position: {
-        x: clamp(p.x + drag.current.dx, 0, inst.canvas.width),
-        y: clamp(p.y + drag.current.dy, 0, inst.canvas.height),
-      },
-    });
+    if (resize.current) {
+      const r = resize.current;
+      const p = toCanvas(evt);
+      // Pointer offset from centre, un-rotated into the fixture's local frame.
+      const local = rot(p.x - r.center.x, p.y - r.center.y, -r.rotationDeg);
+      let w = clamp(Math.abs(local.x) * 2, 0.2, inst.canvas.width * 2);
+      let h = clamp(Math.abs(local.y) * 2, 0.2, inst.canvas.height * 2);
+      if (r.lockAspect) w = h = Math.max(w, h);
+      patchTransform(r.id, { size: { x: round(w), y: round(h) } });
+      return;
+    }
+    if (drag.current) {
+      const p = toCanvas(evt);
+      patchTransform(drag.current.id, {
+        position: {
+          x: clamp(p.x + drag.current.dx, 0, inst.canvas.width),
+          y: clamp(p.y + drag.current.dy, 0, inst.canvas.height),
+        },
+      });
+    }
   };
   const onPointerUp = () => {
     drag.current = null;
+    resize.current = null;
+  };
+
+  const addDrawVertex = (clientX: number, clientY: number) => {
+    if (!draw) return;
+    const c = toCanvasXY(clientX, clientY);
+    const p = { x: clamp(c.x, 0, inst.canvas.width), y: clamp(c.y, 0, inst.canvas.height) };
+    // Clicking back on the first vertex (with 3+ points down) closes the loop and commits.
+    const first = draw.points[0];
+    const snap = Math.max(0.3, Math.min(inst.canvas.width, inst.canvas.height) * 0.035);
+    if (first && draw.points.length >= 3 && Math.hypot(p.x - first.x, p.y - first.y) <= snap) {
+      commitDrawWith(draw.points, true);
+      return;
+    }
+    setDraw({ ...draw, points: [...draw.points, p] });
+  };
+
+  const onCanvasContextMenu = (e: React.MouseEvent) => {
+    if (!draw) return;
+    e.preventDefault();
+    addDrawVertex(e.clientX, e.clientY);
   };
 
   const vb = `0 0 ${inst.canvas.width} ${inst.canvas.height}`;
@@ -189,7 +349,7 @@ export function LayoutPage() {
         <Box>
           <Typography variant="h2">Layout</Typography>
           <Typography variant="body2" color="text.secondary">
-            Place each fixture on the virtual canvas. Effects (milestone 4) render to this canvas.
+            Place, resize and shape each fixture on the virtual canvas. Effects render to this canvas.
           </Typography>
         </Box>
         <Stack direction="row" spacing={1}>
@@ -215,6 +375,27 @@ export function LayoutPage() {
 
       {deviceOpts.length === 0 && <Alert severity="info">Add a device first, then place its fixtures here.</Alert>}
 
+      {draw && (
+        <Alert
+          severity="info"
+          action={
+            <Stack direction="row" spacing={1}>
+              <Button color="inherit" size="small" onClick={commitDraw} disabled={draw.points.length < 2}>
+                Finish ({draw.points.length})
+              </Button>
+              <Button color="inherit" size="small" onClick={cancelDraw}>
+                Cancel
+              </Button>
+            </Stack>
+          }
+        >
+          Drawing a custom shape. <strong>Click</strong> (or right-click) to drop points — the first
+          is LED 0, then it runs point to point. <strong>Enter</strong> finishes it as an open line;
+          click back <strong>on point 0</strong> to close it into a loop. <strong>Esc</strong>{' '}
+          cancels.
+        </Alert>
+      )}
+
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 320px' } }}>
         <Card>
           <CardContent sx={{ p: 1 }}>
@@ -225,9 +406,15 @@ export function LayoutPage() {
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerLeave={onPointerUp}
-              // Fixture handlers stopPropagation, so this only fires for the
-              // empty canvas.
-              onPointerDown={() => setSelectedId(null)}
+              onContextMenu={onCanvasContextMenu}
+              // While drawing, every left click places a vertex; otherwise a
+              // click on the empty canvas clears the selection.
+              onClick={(e: React.MouseEvent) => {
+                if (draw) addDrawVertex(e.clientX, e.clientY);
+              }}
+              onPointerDown={(e: React.PointerEvent) => {
+                if (!draw && e.button === 0) setSelectedId(null);
+              }}
               sx={{
                 width: '100%',
                 aspectRatio: `${inst.canvas.width} / ${inst.canvas.height}`,
@@ -287,9 +474,77 @@ export function LayoutPage() {
                     >
                       {f.name}
                     </text>
+
+                    {isSel && !draw && (() => {
+                      const hs = Math.max(0.5, Math.min(inst.canvas.width, inst.canvas.height) * 0.028);
+                      return (
+                        <g transform={`translate(${f.transform.position.x} ${f.transform.position.y}) rotate(${f.transform.rotationDeg})`}>
+                          {([[-1, -1], [1, -1], [1, 1], [-1, 1]] as const).map(([sx, sy]) => (
+                            <rect
+                              key={`${sx}${sy}`}
+                              x={(sx * f.transform.size.x) / 2 - hs / 2}
+                              y={(sy * f.transform.size.y) / 2 - hs / 2}
+                              width={hs}
+                              height={hs}
+                              rx={hs * 0.25}
+                              fill={md3.primary}
+                              stroke={md3.surfaceContainerLowest}
+                              strokeWidth={hs * 0.12}
+                              style={{ cursor: 'nwse-resize' }}
+                              onPointerDown={(e) => onResizeHandleDown(e, f)}
+                            />
+                          ))}
+                        </g>
+                      );
+                    })()}
                   </g>
                 );
               })}
+
+              {draw && (() => {
+                const pts = draw.points;
+                const r = Math.max(0.18, Math.min(inst.canvas.width, inst.canvas.height) * 0.012);
+                const canClose = pts.length >= 3;
+                const line = pts.map((p) => `${p.x},${p.y}`).join(' ');
+                return (
+                  <g pointerEvents="none">
+                    {pts.length >= 2 && (
+                      <polyline
+                        points={draw.closed && canClose ? `${line} ${pts[0]!.x},${pts[0]!.y}` : line}
+                        fill="none"
+                        stroke={md3.primary}
+                        strokeWidth={r * 0.35}
+                        strokeDasharray={`${r} ${r * 0.8}`}
+                      />
+                    )}
+                    {pts.map((p, i) => (
+                      <g key={i}>
+                        {i === 0 && canClose && (
+                          <circle cx={p.x} cy={p.y} r={r * 2.4} fill="none" stroke={md3.primary} strokeWidth={r * 0.2} strokeDasharray={`${r * 0.5} ${r * 0.4}`} />
+                        )}
+                        <circle
+                          cx={p.x}
+                          cy={p.y}
+                          r={r}
+                          fill={i === 0 ? md3.primary : md3.surfaceContainerHighest}
+                          stroke={md3.primary}
+                          strokeWidth={r * 0.25}
+                        />
+                        <text
+                          x={p.x}
+                          y={p.y - r * 1.8}
+                          textAnchor="middle"
+                          fontSize={r * 2}
+                          fill={md3.primary}
+                          fontWeight={700}
+                        >
+                          {i}
+                        </text>
+                      </g>
+                    ))}
+                  </g>
+                );
+              })()}
             </Box>
           </CardContent>
         </Card>
@@ -313,16 +568,45 @@ export function LayoutPage() {
                   {selected.startIndex + fixtureLedCount(selected.geometry) - 1}
                 </Typography>
 
-                {selected.geometry.kind === 'strip' && (
+                <TextField
+                  select
+                  size="small"
+                  label="Shape"
+                  value={geomChoiceOf(selected.geometry)}
+                  onChange={(e) => setGeomChoice(selected.id, e.target.value as GeomChoice)}
+                >
+                  <MenuItem value="strip">Strip (straight line)</MenuItem>
+                  <MenuItem value="matrix">Matrix</MenuItem>
+                  <Divider />
+                  {SHAPE_KINDS.map((s) => (
+                    <MenuItem key={s} value={s} sx={{ textTransform: 'capitalize' }}>
+                      {s}
+                    </MenuItem>
+                  ))}
+                  <MenuItem value="custom">Custom shape…</MenuItem>
+                </TextField>
+
+                {(selected.geometry.kind === 'strip' || selected.geometry.kind === 'shape') && (
                   <TextField
                     type="number"
                     size="small"
                     label="LED count"
                     value={selected.geometry.count}
-                    onChange={(e) =>
-                      patchFixture(selected.id, { geometry: { kind: 'strip', count: Math.max(0, Number(e.target.value)) } })
-                    }
+                    onChange={(e) => {
+                      const count = Math.max(0, Number(e.target.value));
+                      patchFixture(selected.id, {
+                        geometry:
+                          selected.geometry.kind === 'shape'
+                            ? { ...selected.geometry, count }
+                            : { kind: 'strip', count },
+                      });
+                    }}
                   />
+                )}
+                {selected.geometry.kind === 'shape' && selected.geometry.shape.type === 'custom' && (
+                  <Button size="small" variant="outlined" onClick={() => setGeomChoice(selected.id, 'custom')}>
+                    Redraw custom shape
+                  </Button>
                 )}
                 {selected.geometry.kind === 'matrix' && (
                   <Stack direction="row" spacing={1}>
@@ -425,3 +709,11 @@ export function LayoutPage() {
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const round = (n: number) => Math.round(n * 100) / 100;
+
+/** Current value for the inspector's Shape dropdown. */
+function geomChoiceOf(g: FixtureGeometry): GeomChoice {
+  if (g.kind === 'strip') return 'strip';
+  if (g.kind === 'matrix') return 'matrix';
+  if (g.kind === 'points') return 'custom';
+  return g.shape.type === 'custom' ? 'custom' : g.shape.type;
+}
