@@ -511,6 +511,24 @@ export function StudioPage() {
     }
   };
 
+  /** "As-output" preview: black canvas, fixtures lit with their real colour.
+   *  Preview-only — the stream keeps running unchanged. */
+  const [showOutput, setShowOutput] = useState(() => {
+    try {
+      return localStorage.getItem('ewc.studio.showOutput') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleOutput = (on: boolean) => {
+    setShowOutput(on);
+    try {
+      localStorage.setItem('ewc.studio.showOutput', on ? '1' : '0');
+    } catch {
+      /* private mode — no persistence */
+    }
+  };
+
   /** Pending scene switch awaiting confirmation (only shown while streaming). */
   const [confirmLoad, setConfirmLoad] = useState<{ id: number | null } | null>(null);
 
@@ -766,25 +784,45 @@ export function StudioPage() {
             scene={scene}
             installation={installation}
             playing
-            editable
-            showFloorplan={showFloorplan}
+            editable={!showOutput}
+            showFloorplan={showFloorplan && !showOutput}
+            showOutputOnly={showOutput}
             deviceGains={deviceGains}
             epochMs={streamingThis ? stream?.epochMs ?? null : null}
             selectedLayerId={selectedId}
             onSelectLayer={setSelectedId}
             onLayerRect={(id, rect) => patchLayer(id, { rect })}
           />
-          {installation?.floorplan && (
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 0.5 }}>
+          <Stack direction="row" alignItems="center" spacing={2} sx={{ px: 0.5 }} flexWrap="wrap" useFlexGap>
+            <Stack direction="row" alignItems="center" spacing={1}>
               <Switch
                 size="small"
-                checked={showFloorplan}
-                onChange={(e) => toggleFloorplan(e.target.checked)}
+                checked={showOutput}
+                onChange={(e) => toggleOutput(e.target.checked)}
               />
               <Typography variant="body2" color="text.secondary">
-                Show floorplan
+                Show output
               </Typography>
             </Stack>
+            {installation?.floorplan && (
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Switch
+                  size="small"
+                  checked={showFloorplan}
+                  disabled={showOutput}
+                  onChange={(e) => toggleFloorplan(e.target.checked)}
+                />
+                <Typography variant="body2" color="text.secondary">
+                  Show floorplan
+                </Typography>
+              </Stack>
+            )}
+          </Stack>
+          {showOutput && (
+            <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, mt: -1 }}>
+              Preview only — the fixtures show their live output colour and the layers are hidden.
+              The stream keeps running unchanged.
+            </Typography>
           )}
           <Card>
             <CardContent>

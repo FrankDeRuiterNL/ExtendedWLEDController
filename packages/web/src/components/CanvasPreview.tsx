@@ -22,6 +22,12 @@ interface Props {
   showFixtures?: boolean;
   /** Overlay the installation's floorplan image (preview-only, 50% opacity). */
   showFloorplan?: boolean;
+  /**
+   * "As-output" view: black out the canvas (all FX / media layers hidden) and
+   * show only the fixtures, each LED lit with its actual current colour. The
+   * stream is unaffected — this is a preview-only view mode.
+   */
+  showOutputOnly?: boolean;
   resolution?: number;
   /** Enable the layer-region overlay (drag to move, corners to resize). */
   editable?: boolean;
@@ -89,10 +95,13 @@ function drawFixtures(
   t: number,
   mediaFrames: MediaFrames | undefined,
   deviceGains: Record<number, readonly [number, number, number]> | undefined,
+  /** "As-output" view — canvas is black, so lean into the lit core + a glow. */
+  outputMode = false,
 ): void {
   octx.clearRect(0, 0, cw, ch);
   octx.lineCap = 'round';
   octx.lineJoin = 'round';
+  const coreW = (outputMode ? 3.2 : 2) * dpr;
 
   const trace = (px: ReadonlyArray<readonly [number, number]>) => {
     octx.beginPath();
@@ -107,12 +116,13 @@ function drawFixtures(
 
     const px = pts.map((p) => [p.x * cw, p.y * ch] as const);
     const g = deviceGains?.[f.deviceId];
-    const colourAt = (i: number): string => {
-      const c = sampleScene(scene, pts[i]!.x, pts[i]!.y, t, mediaFrames);
+    const cols = pts.map((p) => {
+      const c = sampleScene(scene, p.x, p.y, t, mediaFrames);
       return g
         ? `rgb(${clamp255(c[0] * g[0])},${clamp255(c[1] * g[1])},${clamp255(c[2] * g[2])})`
         : `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
-    };
+    });
+    const colourAt = (i: number) => cols[i]!;
 
     const single = px.length === 1;
 
@@ -124,29 +134,47 @@ function drawFixtures(
     } else {
       trace(px);
     }
-    octx.strokeStyle = 'rgba(0,0,0,0.55)';
+    octx.strokeStyle = outputMode ? 'rgba(0,0,0,0.9)' : 'rgba(0,0,0,0.55)';
     octx.lineWidth = 5 * dpr;
     octx.stroke();
-    octx.strokeStyle = 'rgba(255,255,255,0.28)';
+    octx.strokeStyle = outputMode ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.28)';
     octx.lineWidth = 3.2 * dpr;
     octx.stroke();
 
-    // Lit core — the actual per-LED colour.
     if (single) {
+      const col = colourAt(0);
+      if (outputMode) {
+        octx.globalAlpha = 0.28;
+        octx.beginPath();
+        octx.arc(px[0]![0], px[0]![1], 5 * dpr, 0, Math.PI * 2);
+        octx.fillStyle = col;
+        octx.fill();
+        octx.globalAlpha = 1;
+      }
       octx.beginPath();
-      octx.arc(px[0]![0], px[0]![1], 2 * dpr, 0, Math.PI * 2);
-      octx.fillStyle = colourAt(0);
+      octx.arc(px[0]![0], px[0]![1], (outputMode ? 2.6 : 2) * dpr, 0, Math.PI * 2);
+      octx.fillStyle = col;
       octx.fill();
       continue;
     }
-    octx.lineWidth = 2 * dpr;
-    for (let i = 0; i < px.length - 1; i++) {
-      octx.beginPath();
-      octx.moveTo(px[i]![0], px[i]![1]);
-      octx.lineTo(px[i + 1]![0], px[i + 1]![1]);
-      octx.strokeStyle = colourAt(i);
-      octx.stroke();
-    }
+
+    // Lit core — the actual per-LED colour. In output mode a cheap wide,
+    // low-alpha pass under it fakes a bloom (no per-segment canvas shadows).
+    const drawCore = (widthPx: number, alpha: number) => {
+      octx.globalAlpha = alpha;
+      octx.lineWidth = widthPx;
+      for (let i = 0; i < px.length - 1; i++) {
+        octx.beginPath();
+        octx.moveTo(px[i]![0], px[i]![1]);
+        octx.lineTo(px[i + 1]![0], px[i + 1]![1]);
+        octx.strokeStyle = colourAt(i);
+        octx.stroke();
+      }
+      octx.globalAlpha = 1;
+    };
+    if (outputMode) drawCore(coreW * 2.6, 0.22);
+    drawCore(coreW, 1);
+
     octx.beginPath();
     octx.arc(px[px.length - 1]![0], px[px.length - 1]![1], 1 * dpr, 0, Math.PI * 2);
     octx.fillStyle = colourAt(px.length - 1);
@@ -165,6 +193,7 @@ export function CanvasPreview({
   playing = true,
   showFixtures = true,
   showFloorplan = false,
+  showOutputOnly = false,
   resolution = 200,
   editable = false,
   selectedLayerId = null,
@@ -258,8 +287,26 @@ export function CanvasPreview({
     [],
   );
 
-  const state = useRef({ scene, installation, playing, showFixtures, epochMs, deviceGains, mediaImages });
-  state.current = { scene, installation, playing, showFixtures, epochMs, deviceGains, mediaImages };
+  const state = useRef({
+    scene,
+    installation,
+    playing,
+    showFixtures,
+    showOutputOnly,
+    epochMs,
+    deviceGains,
+    mediaImages,
+  });
+  state.current = {
+    scene,
+    installation,
+    playing,
+    showFixtures,
+    showOutputOnly,
+    epochMs,
+    deviceGains,
+    mediaImages,
+  };
   const drag = useRef<
     | { id: string; mode: 'move' | Corner; startRect: LayerRect; px: number; py: number }
     | null
@@ -383,25 +430,43 @@ export function CanvasPreview({
         }
       }
 
-      const data = img.data;
-      for (let py = 0; py < h; py++) {
-        for (let px = 0; px < w; px++) {
-          const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t, mediaFrames);
-          const o = (py * w + px) * 4;
-          data[o] = c[0];
-          data[o + 1] = c[1];
-          data[o + 2] = c[2];
-          data[o + 3] = 255;
+      if (s.showOutputOnly) {
+        // "As-output" view — black canvas, only the fixtures are lit. The scene
+        // still streams; the fixture overlay below samples the real scene.
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, w, h);
+      } else {
+        const data = img.data;
+        for (let py = 0; py < h; py++) {
+          for (let px = 0; px < w; px++) {
+            const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t, mediaFrames);
+            const o = (py * w + px) * 4;
+            data[o] = c[0];
+            data[o + 1] = c[1];
+            data[o + 2] = c[2];
+            data[o + 3] = 255;
+          }
         }
+        ctx.putImageData(img, 0, 0);
       }
-      ctx.putImageData(img, 0, 0);
 
       // Fixtures: crisp, on their own display-resolution overlay. Each LED's
       // colour is the actual `sampleScene` value with the device's white balance
       // applied — the one place the preview can reflect a per-device correction.
       if (fixCtx) {
         if (s.showFixtures && s.installation && s.installation.fixtures.length > 0) {
-          drawFixtures(fixCtx, fixW, fixH, dpr, s.installation, s.scene, t, mediaFrames, s.deviceGains);
+          drawFixtures(
+            fixCtx,
+            fixW,
+            fixH,
+            dpr,
+            s.installation,
+            s.scene,
+            t,
+            mediaFrames,
+            s.deviceGains,
+            s.showOutputOnly,
+          );
         } else {
           fixCtx.clearRect(0, 0, fixW, fixH);
         }
