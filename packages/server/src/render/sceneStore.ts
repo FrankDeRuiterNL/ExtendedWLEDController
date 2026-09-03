@@ -37,6 +37,20 @@ const media = z.object({
     .nullish(),
 });
 
+const textLayer = z.object({
+  value: z.string().max(1000),
+  fontId: z.string().max(40),
+  sizePx: z.number().positive().max(512),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  strikethrough: z.boolean().optional(),
+  color: rgb.optional(),
+  assetId: z.string().min(1).max(64).optional(),
+  naturalWidth: z.number().positive().optional(),
+  naturalHeight: z.number().positive().optional(),
+  renderHash: z.string().max(4000).optional(),
+});
+
 const layer = z.object({
   id: z.string().min(1).max(64),
   name: z.string().max(64).optional(),
@@ -51,6 +65,7 @@ const layer = z.object({
     .object({ effectId: z.string().min(1).max(64), params, invert: z.boolean().optional() })
     .nullish(),
   media: media.nullish(),
+  text: textLayer.nullish(),
 });
 
 export const sceneSchema = z.object({

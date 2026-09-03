@@ -8,9 +8,12 @@ import {
   fitMediaRect,
   makeLayer,
   makeMediaLayer,
+  makeTextLayer,
   resolveMediaFrameIndex,
   resolveMediaPositionMs,
   sampleScene,
+  textRasterStale,
+  textRenderHash,
   unknownEffectIds,
   type MediaFrame,
   type MediaPlayback,
@@ -292,6 +295,52 @@ describe('media layers', () => {
     expect(r.h).toBeCloseTo(1 / 2.25);
     expect(r.x).toBeCloseTo(0);
     expect(r.y).toBeCloseTo((1 - 1 / 2.25) / 2);
+  });
+});
+
+describe('text layers', () => {
+  const frame: MediaFrame = {
+    width: 2,
+    height: 1,
+    data: new Uint8ClampedArray([0, 0, 255, 255, 255, 255, 0, 255]),
+  };
+  const textScene = (): Scene => ({
+    name: 't',
+    background: [0, 0, 0],
+    layers: [
+      {
+        ...makeTextLayer('tx'),
+        text: { value: 'HI', fontId: 'inter', sizePx: 96, assetId: 'a1', naturalWidth: 2, naturalHeight: 1 },
+      },
+    ],
+  });
+
+  it('samples its uploaded raster through the same frame provider as media', () => {
+    const frames = new Map([['tx', frame]]);
+    expect(sampleScene(textScene(), 0.25, 0.5, 0, frames)).toEqual([0, 0, 255]);
+    expect(sampleScene(textScene(), 0.75, 0.5, 0, frames)).toEqual([255, 255, 0]);
+  });
+
+  it('contributes nothing before its raster is supplied', () => {
+    expect(sampleScene(textScene(), 0.5, 0.5, 0, new Map())).toEqual([0, 0, 0]);
+  });
+
+  it('is not flagged as an unknown effect', () => {
+    expect(unknownEffectIds(textScene())).toEqual([]);
+  });
+
+  it('a fresh text layer has no asset and is stale until rendered', () => {
+    const l = makeTextLayer('tx');
+    expect(l.text?.assetId).toBeUndefined();
+    expect(textRasterStale(l.text!)).toBe(true);
+  });
+
+  it('renderHash tracks only the render-affecting fields', () => {
+    const base = { value: 'A', fontId: 'inter', sizePx: 40 } as const;
+    expect(textRenderHash(base)).toBe(textRenderHash({ ...base, assetId: 'x', naturalWidth: 9 }));
+    expect(textRenderHash(base)).not.toBe(textRenderHash({ ...base, bold: true }));
+    expect(textRenderHash(base)).not.toBe(textRenderHash({ ...base, sizePx: 41 }));
+    expect(textRasterStale({ ...base, assetId: 'x', renderHash: textRenderHash(base) })).toBe(false);
   });
 });
 

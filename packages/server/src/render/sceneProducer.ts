@@ -43,6 +43,24 @@ function buildMediaProvider(scene: Scene, media: MediaStore | undefined) {
 
   if (media) {
     for (const layer of scene.layers) {
+      // Text layers: the browser rasterised the string to an image asset — read
+      // it back exactly like an image media layer. No asset id yet = the raster
+      // hasn't been uploaded (a brand-new layer); the layer just stays dark.
+      if (layer.text) {
+        const textAssetId = layer.text.assetId;
+        if (!textAssetId) continue;
+        const asset = media.get(textAssetId);
+        if (!asset || asset.kind !== 'image') {
+          if (!asset) log.warn(`scene: text asset ${textAssetId} for layer ${layer.id} not found`);
+          continue;
+        }
+        images.set(layer.id, {
+          width: asset.width,
+          height: asset.height,
+          data: new Uint8ClampedArray(asset.data.buffer, asset.data.byteOffset, asset.data.length),
+        });
+        continue;
+      }
       if (!layer.media) continue;
       const asset = media.get(layer.media.assetId);
       if (!asset) {
