@@ -438,7 +438,78 @@ strips that have no dedicated white channel:
 - Devices with a real white channel (RGBW / RGBW+CCT) already do white on the
   hardware via `seg.cct`; this correction is for RGB-only strips.
 
-### Rundown page (milestone 8)
+### Media layers in Studio — image / video pixel-mapping (milestone 8)
+
+Today every Studio layer is an effect. Split the layer type in two. The Studio
+**"+ Add"** button opens a small choice — **FX Layer** or **Media Layer** —
+instead of adding a solid straight away.
+
+**FX Layer** is exactly what exists now: pick/stack effects, tweak params, blend
+mode, opacity, and a draggable/resizable region box on the preview.
+
+**Media Layer** shows an image or a video (`.mp4` / `.mov`, **max 500 MB**, no
+audio — we don't use audio) as a layer on the shared canvas. Where the media's
+box overlaps a fixture, that fixture's LEDs take their colour from the media
+pixels at those normalised coordinates — image/video **pixel-mapping**. Outside
+the box the layer contributes nothing and the layers below show through, so media
+and effects coexist in one scene.
+
+Media Layer inspector fields:
+
+- **Layer name** — same as FX Layer (falls back to the filename).
+- **Media** — a file picker / drop zone at a logical spot in the inspector.
+  Shows an upload progress bar (500 MB is large), then the first frame as a
+  thumbnail once ready.
+- **Filename** — the uploaded media's file name (read-only).
+- **Trim Duration** — in- and out-point for the clip (a dual-handle range over
+  the clip length with the in/out timecodes shown). *Video only.*
+- **Playback Type** — one of:
+  - **Play + hold last frame** — plays once, then freezes on the out-point frame.
+  - **Play + hide when stopped** — plays once, then the layer goes dark (shows
+    nothing) — the layers below show through.
+  - **Loop indefinitely** — restarts from the in-point every time it reaches the
+    out-point.
+  *Video only.*
+- **Playback Controls** — **play**, **pause**, **stop**, **loop** transport
+  buttons driving the layer's playback head (and the live stream when this scene
+  is streaming). *Video only.*
+- Blend mode, opacity and the on-canvas region box apply the same as an FX Layer,
+  **except the region is aspect-locked to the media's native ratio** (resize from
+  a corner scales both dimensions together; the box can still be moved freely).
+
+When the media is an **image**, Trim Duration, Playback Type and Playback Controls
+are irrelevant and are **hidden** for that layer — it's just a static picture in
+its box.
+
+Notes / decisions to make when building it:
+
+- **Where frames come from.** `@ewc/core`'s compositor must stay runtime-agnostic,
+  so it can't decode video. Give `sampleScene` an injected frame provider (a map
+  of `layerId → {width, height, RGBA}`); the browser fills it from a hidden
+  `<video>`/`<img>` drawn to an offscreen canvas, and the server fills it from its
+  own decoder. The core just samples the buffer it's handed.
+- **Server-side decode.** The DDP loop needs a frame per media layer at ~40 fps
+  without blocking. Likely `ffmpeg` in the container image, invoked on upload to
+  **transcode once** to a small, decode-cheap form — downscale to ~128 px on the
+  long edge (fixtures are low-res), normalise to ~40 fps, strip audio — then a
+  lightweight frame reader feeds a small ring buffer at play time. Research the
+  memory/throughput budget for one and for several simultaneous media layers.
+- **Upload path.** 500 MB can't go through the JSON/`raw` body path the floorplan
+  uses — stream the multipart upload straight to a temp file, then transcode.
+  Store the media where GIF-bake / floorplan uploads go (the `/data` volume).
+- **Scene serialisation.** A media layer saves as a reference to the uploaded
+  asset plus `{ trimIn, trimOut, playbackType }` and its aspect-locked region —
+  never the bytes. Transport state (playing/paused/head position) is live only,
+  like a lighting console; only "Loop indefinitely" is a saved property.
+- **Preview ↔ wire sync.** Extend the existing `epochMs` phase-lock so the media
+  playback head matches between the browser preview and the stream.
+- **Orphan cleanup.** Deleting a media layer or a scene should let its uploaded
+  asset be garbage-collected if nothing else references it.
+- **UX.** The media box on the preview shows the actual frame (not just an
+  outline) so it can be lined up against the fixture dots. Keep the transport and
+  trim UI compact and familiar (standard transport icons, scrub on the trim bar).
+
+### Rundown page (milestone 9)
 
 A **Rundown** page: an ordered list of **cues**, each of which activates a saved
 **Studio scene** on the stream output. Cues can be added, edited and deleted; the
@@ -463,7 +534,7 @@ Each cue holds:
   Entered as time: `hh:mm:ss` (`1:30:24`), `mm:ss` (`1:20`), or bare seconds
   (`35`).
 
-### Trigger page (milestone 9)
+### Trigger page (milestone 10)
 
 A **Trigger** page: external inputs routed to system actions — activate a scene,
 start a pixel paint on a device, total blackout, start a cue in the rundown, and
@@ -486,40 +557,35 @@ Selecting the input type reveals exactly the fields that input needs:
 Each trigger also carries the **action** it performs when it fires (scene,
 pixel-paint, blackout, rundown GO, …).
 
-### Stage page — per-device Stream Solid (small, fold into milestone 7 or 8)
+### Stage page — per-device Stream Solid (small, fold into milestone 7 or 9)
 
 On the Stage page's DDP transport test, add a **"Stream Solid"** button **per
 device** in the device list, so the DDP transport can be tested against a single
 device instead of all connected devices at once.
 
-### iOS web app (milestone 10)
+### iOS web app (milestone 11)
 
 An **iOS web app** exposing all the functionality of the desktop variant, with
 UX/UI purpose-built for iOS (native-feeling navigation, touch targets, layout) —
 not just the desktop UI in a narrow viewport.
 
-### Media pixel-mapping — image / video onto the fixtures (research first, later milestone)
+### Media pixel-mapping — superseded
 
-A **Media Source** the user can place on the layout canvas alongside fixtures:
+The image/video pixel-mapping idea is now **milestone 8, "Media layers in
+Studio"** above — modelled as a Media Layer in the Studio layer stack rather than
+a separate Layout-canvas source.
 
-- Upload an image or a short video; it appears on the Layout canvas as a
-  **semi-transparent** rectangle so the fixtures behind it stay visible.
-- Position, scale and rotate it on the canvas like a fixture transform.
-- Any fixture whose LEDs fall under the media rectangle is coloured from the
-  media's pixels at those normalised coordinates — image = static, video = played
-  back at its own frame rate and streamed live over DDP.
-- Model it as a **canvas source** feeding the same render/mapping pipeline as
-  effects (most likely a special layer/source type, not a parallel system): the
-  compositor samples the decoded media frame for points inside the rectangle and
-  falls through to the layers below outside it. So media and effects can coexist
-  in one scene.
-- Open questions to research before committing: where video decoding happens
-  (server-side `ffmpeg` → frame buffer, vs. browser `<video>` → the preview only
-  and a server decoder for the wire), memory/throughput for looping video at
-  40 fps, file-size limits, and how a video source serialises into a saved scene
-  (reference the uploaded file, store it where the GIF-bake uploads go).
+### Floorplan reference image on the layout canvas — DONE (v0.6.0)
 
-### Floorplan reference image on the layout canvas (later milestone)
+Shipped as milestone 7 increment 7a. `Installation.floorplan` holds the asset
+name + a `rev` counter + natural dimensions + an on-canvas transform; the image
+lives on the `/data` volume and is served from `/api/installation/floorplan`. It
+renders below the grid raster at 50 % opacity on the Layout canvas (drag / corner
+resize with aspect lock when no fixture is selected) and as an overlay on the
+Studio preview, each with its own independent "Show floorplan" toggle. Never
+reaches the wire. Original spec below.
+
+### Floorplan reference image on the layout canvas (original plan)
 
 A **static** background image (a room floorplan) to place fixtures against —
 purely a visual aid, never a colour source (that's the media pixel-mapping item
