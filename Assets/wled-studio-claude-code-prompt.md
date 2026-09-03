@@ -239,6 +239,11 @@ returns to normal mode (`255` = stay indefinitely).
 
 Implement DNRGB as a per-device fallback toggle. Do not make it the default.
 
+> **DONE (v0.7.0):** per-device transport toggle (DDP ↔ DNRGB on 21324) on the
+> Stage page, alongside a per-device fps cap and a per-device "Stream Solid" test
+> button. DNRGB is RGB-only (no white channel on the fallback path); a 2 s realtime
+> timeout so a lost `{live:false}` self-heals.
+
 ### Baking to the device — how persistence actually works
 
 - **`seg.i` is never persisted.** It freezes the segment, is lost on power-off, and is

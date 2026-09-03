@@ -55,6 +55,8 @@ export function useSetDmxManaged() {
 
 // --- stream ----------------------------------------------------------
 
+export type RealtimeTransport = 'ddp' | 'dnrgb';
+
 export interface StreamStatusDTO {
   mode: 'idle' | 'solid' | 'pattern' | 'scene' | 'paint';
   running: boolean;
@@ -75,6 +77,10 @@ export interface StreamStatusDTO {
     bytes: number;
     deviceFps: number | null;
     pixelOffset: number;
+    /** DDP (default) or the legacy DNRGB UDP fallback. */
+    transport: RealtimeTransport;
+    /** Per-device fps cap, or null when uncapped. */
+    maxFps: number | null;
   }>;
 }
 
@@ -101,6 +107,32 @@ export function useStartPattern() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.post<StreamStatusDTO>('/stream/pattern'),
+    onSuccess: (d) => qc.setQueryData(streamKey, d),
+  });
+}
+
+/** Solid colour to a single device (releases any others currently streaming). */
+export function useStartSolidDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ deviceId, color }: { deviceId: number; color: [number, number, number] }) =>
+      api.post<StreamStatusDTO>(`/stream/${deviceId}/solid`, { color }),
+    onSuccess: (d) => qc.setQueryData(streamKey, d),
+  });
+}
+
+/** Per-device realtime output config: transport (DDP / legacy DNRGB) + fps cap. */
+export function useSetStreamConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      deviceId,
+      ...body
+    }: {
+      deviceId: number;
+      transport?: RealtimeTransport;
+      maxFps?: number | null;
+    }) => api.put<StreamStatusDTO>(`/stream/${deviceId}/config`, body),
     onSuccess: (d) => qc.setQueryData(streamKey, d),
   });
 }

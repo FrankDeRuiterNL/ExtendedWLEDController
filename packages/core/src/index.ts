@@ -17,6 +17,7 @@ export * from './wled/constants.js';
 
 export * from './util/salvage.js';
 export * from './ddp/packet.js';
+export * from './ddp/legacyUdp.js';
 export * from './dmx/plan.js';
 export * from './mapping/model.js';
 export * from './mapping/engine.js';
@@ -40,7 +41,7 @@ export * from './api/pixelScenes.js';
  * on every milestone completion or otherwise significant change, and keep the
  * five workspace `package.json` versions in step with it.
  */
-export const APP_VERSION = '0.6.0';
+export const APP_VERSION = '0.7.0';
 
 /** @deprecated use {@link APP_VERSION} — kept so older callers keep compiling. */
 export const CORE_VERSION = APP_VERSION;

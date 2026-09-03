@@ -1,11 +1,17 @@
 import dgram from 'node:dgram';
 import {
   DDP_PORT,
+  DNRGB_TIMEOUT_SEC,
+  LEGACY_UDP_PORT,
   buildDdpFrame,
+  buildDnrgbFrame,
   nextDdpSequence,
   type PixelFormat,
 } from '@ewc/core';
 import { log } from '../logger.js';
+
+/** How a device's frames leave the box. `dnrgb` = legacy realtime UDP fallback. */
+export type RealtimeTransport = 'ddp' | 'dnrgb';
 
 export interface DdpTarget {
   deviceId: number;
@@ -19,6 +25,13 @@ export interface DdpTarget {
    * if the DDP path on a given firmware shifts by that, nudge this by ±1.
    */
   pixelOffset: number;
+  /** DDP (default) or the legacy DNRGB UDP fallback for this one device. */
+  transport: RealtimeTransport;
+  /**
+   * Cap this device's send rate (fps). `null` = stream at the full tick rate.
+   * Used to spare slower controllers (ESP8266) that can't ingest 40 fps.
+   */
+  maxFps: number | null;
 }
 
 export interface DdpDeviceStats {
@@ -30,6 +43,8 @@ export interface DdpDeviceStats {
   /** Device-reported render fps, if known (backpressure signal). */
   deviceFps: number | null;
   lastSendMs: number;
+  /** Earliest wall-clock ms the next frame for this device may go out (fps cap). */
+  pacedUntilMs: number;
 }
 
 /** Produces the wire byte buffer for one device for the current frame. */
@@ -106,6 +121,7 @@ export class DdpSender {
           bytes: 0,
           deviceFps: null,
           lastSendMs: 0,
+          pacedUntilMs: 0,
         });
       }
     }
@@ -146,7 +162,8 @@ export class DdpSender {
     if (this.tickBusy) return; // never let ticks pile up
     this.tickBusy = true;
     this.tickCount++;
-    const tMs = Date.now() - this.startMs;
+    const now = Date.now();
+    const tMs = now - this.startMs;
     const frameSeq = this.seq;
     this.seq = nextDdpSequence(this.seq);
 
@@ -154,6 +171,14 @@ export class DdpSender {
       for (const target of this.targets) {
         const st = this.stats.get(target.deviceId)!;
         st.deviceFps = this.deviceFpsFn?.(target.deviceId) ?? st.deviceFps;
+
+        // Per-device fps cap: skip ticks until this device is next "due". This is
+        // deliberate pacing for slow controllers — NOT a dropped frame, so it
+        // must not touch `framesDropped` or it reads as a struggling device.
+        if (target.maxFps && target.maxFps > 0 && target.maxFps < this.fps) {
+          if (now < st.pacedUntilMs) continue;
+          st.pacedUntilMs = now + 1000 / target.maxFps;
+        }
 
         // Backpressure: if the device is *rendering* but well below our rate,
         // skip every other frame so we don't build lag it can't recover from.
@@ -178,15 +203,30 @@ export class DdpSender {
         }
         if (data.length === 0) continue;
 
-        const bytesPerLed = target.format === 'rgbw' ? 4 : 3;
-        const packets = buildDdpFrame({
-          data,
-          format: target.format,
-          sequence: frameSeq,
-          startChannelBytes: Math.max(0, target.pixelOffset) * bytesPerLed,
-        });
+        // Transport is decided upstream (see `StreamService.targetFor`), which
+        // also forces `format: 'rgb'` for DNRGB — so `data` is already the right
+        // width here and no producer needs to know which transport is in use.
+        let packets: Uint8Array[];
+        let port: number;
+        if (target.transport === 'dnrgb') {
+          packets = buildDnrgbFrame({
+            data,
+            startIndex: Math.max(0, target.pixelOffset), // DNRGB index is in LEDs
+            timeoutSec: DNRGB_TIMEOUT_SEC,
+          });
+          port = LEGACY_UDP_PORT;
+        } else {
+          const bytesPerLed = target.format === 'rgbw' ? 4 : 3;
+          packets = buildDdpFrame({
+            data,
+            format: target.format,
+            sequence: frameSeq,
+            startChannelBytes: Math.max(0, target.pixelOffset) * bytesPerLed,
+          });
+          port = target.ddpPort || DDP_PORT;
+        }
 
-        await this.sendSequential(target, packets, st);
+        await this.sendSequential(target.host, port, packets, st);
         st.framesSent++;
         st.lastSendMs = Date.now();
       }
@@ -195,13 +235,18 @@ export class DdpSender {
     }
   }
 
-  private sendSequential(target: DdpTarget, packets: Uint8Array[], st: DdpDeviceStats): Promise<void> {
+  private sendSequential(
+    host: string,
+    port: number,
+    packets: Uint8Array[],
+    st: DdpDeviceStats,
+  ): Promise<void> {
     return new Promise<void>((resolve) => {
       let i = 0;
       const sendNext = () => {
         if (i >= packets.length) return resolve();
         const pkt = packets[i++]!;
-        this.sock.send(pkt, target.ddpPort || DDP_PORT, target.host, (err) => {
+        this.sock.send(pkt, port, host, (err) => {
           if (!err) {
             st.packets++;
             st.bytes += pkt.length;

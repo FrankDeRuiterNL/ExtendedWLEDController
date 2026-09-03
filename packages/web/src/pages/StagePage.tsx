@@ -29,8 +29,10 @@ import {
   useSetDmxConfig,
   useSetDmxManaged,
   useSetPixelOffset,
+  useSetStreamConfig,
   useStartPattern,
   useStartSolid,
+  useStartSolidDevice,
   useStopStream,
   useStreamStatus,
 } from '../api/stage.js';
@@ -167,16 +169,27 @@ function DmxPatchCard() {
   );
 }
 
+const FPS_CAPS = [30, 25, 20, 15, 10, 5];
+
 function StreamTestCard() {
   const { data: status } = useStreamStatus();
   const startSolid = useStartSolid();
+  const startSolidDevice = useStartSolidDevice();
   const startPattern = useStartPattern();
   const stopStream = useStopStream();
   const setOffset = useSetPixelOffset();
+  const setStreamConfig = useSetStreamConfig();
   const [color, setColor] = useState('#00b4c8');
 
   const running = status?.running ?? false;
   const mode = status?.mode ?? 'idle';
+  const soloDevice =
+    running && mode === 'solid' && status
+      ? (() => {
+          const lit = status.devices.filter((d) => d.framesSent > 0);
+          return lit.length === 1 ? lit[0]!.deviceId : null;
+        })()
+      : null;
 
   return (
     <Card>
@@ -185,10 +198,11 @@ function StreamTestCard() {
           DDP transport test
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Streams to every device at 40 fps over DDP — the milestone-3 proof that the whole
-          transport works end to end. <b>Solid</b> checks that frames render; the{' '}
-          <b>alignment pattern</b> (LED&nbsp;0 white, 1 red, 2 green, last blue, rest a dim ramp)
-          is the one that reveals a ±1 offset or a reversed run. Effects come in milestone 4.
+          Streams to every device at 40 fps over DDP — the transport proof, end to end. <b>Solid</b>{' '}
+          checks that frames render (or use the per-device <b>Solid</b> button below to test one
+          strip); the <b>alignment pattern</b> (LED&nbsp;0 white, 1 red, 2 green, last blue, rest a
+          dim ramp) reveals a ±1 offset or a reversed run. Per-device transport and rate-cap
+          overrides are in the table.
         </Typography>
 
         <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -234,65 +248,139 @@ function StreamTestCard() {
         {status && status.devices.length > 0 && (
           <>
             <Divider sx={{ my: 2 }} />
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Device</TableCell>
-                  <TableCell align="right">Sent</TableCell>
-                  <TableCell align="right">Dropped</TableCell>
-                  <TableCell align="right">Device fps</TableCell>
-                  <TableCell align="center">Pixel offset</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {status.devices.map((d) => (
-                  <TableRow key={d.deviceId}>
-                    <TableCell>
-                      {d.name}{' '}
-                      <Typography component="span" variant="caption" color="text.secondary">
-                        · {d.connection}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="right">{d.framesSent}</TableCell>
-                    <TableCell align="right" sx={{ color: d.framesDropped > 0 ? md3.warning : undefined }}>
-                      {d.framesDropped}
-                    </TableCell>
-                    <TableCell align="right">{d.deviceFps ?? '—'}</TableCell>
-                    <TableCell align="center">
-                      <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
-                        <Button
-                          size="small"
-                          onClick={() => setOffset.mutate({ deviceId: d.deviceId, offset: d.pixelOffset - 1 })}
-                        >
-                          −1
-                        </Button>
-                        <Typography variant="body2" sx={{ minWidth: 24, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
-                          {d.pixelOffset > 0 ? `+${d.pixelOffset}` : d.pixelOffset}
-                        </Typography>
-                        <Button
-                          size="small"
-                          onClick={() => setOffset.mutate({ deviceId: d.deviceId, offset: d.pixelOffset + 1 })}
-                        >
-                          +1
-                        </Button>
-                        {d.pixelOffset !== 0 && (
+            <Box sx={{ overflowX: 'auto' }}>
+              <Table size="small" sx={{ minWidth: 720 }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Device</TableCell>
+                    <TableCell>Transport</TableCell>
+                    <TableCell>Rate cap</TableCell>
+                    <TableCell align="center">Pixel offset</TableCell>
+                    <TableCell align="center">Test</TableCell>
+                    <TableCell align="right">Live</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {status.devices.map((d) => {
+                    const streamingThis = running && d.framesSent > 0;
+                    return (
+                      <TableRow key={d.deviceId}>
+                        <TableCell>
+                          {d.name}{' '}
+                          <Typography component="span" variant="caption" color="text.secondary">
+                            · {d.connection}
+                            {d.ledCount != null && ` · ${d.ledCount} LEDs`}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <TextField
+                            select
+                            size="small"
+                            variant="standard"
+                            value={d.transport}
+                            onChange={(e) =>
+                              setStreamConfig.mutate({
+                                deviceId: d.deviceId,
+                                transport: e.target.value as 'ddp' | 'dnrgb',
+                              })
+                            }
+                            sx={{ minWidth: 104 }}
+                          >
+                            <MenuItem value="ddp">DDP</MenuItem>
+                            <MenuItem value="dnrgb">Legacy UDP</MenuItem>
+                          </TextField>
+                        </TableCell>
+                        <TableCell>
+                          <TextField
+                            select
+                            size="small"
+                            variant="standard"
+                            value={d.maxFps ?? 0}
+                            onChange={(e) =>
+                              setStreamConfig.mutate({
+                                deviceId: d.deviceId,
+                                maxFps: Number(e.target.value) || null,
+                              })
+                            }
+                            sx={{ minWidth: 92 }}
+                          >
+                            <MenuItem value={0}>Uncapped</MenuItem>
+                            {FPS_CAPS.map((f) => (
+                              <MenuItem key={f} value={f}>
+                                {f} fps
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                        </TableCell>
+                        <TableCell align="center">
+                          <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
+                            <Button
+                              size="small"
+                              onClick={() => setOffset.mutate({ deviceId: d.deviceId, offset: d.pixelOffset - 1 })}
+                            >
+                              −1
+                            </Button>
+                            <Typography
+                              variant="body2"
+                              sx={{ minWidth: 24, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}
+                            >
+                              {d.pixelOffset > 0 ? `+${d.pixelOffset}` : d.pixelOffset}
+                            </Typography>
+                            <Button
+                              size="small"
+                              onClick={() => setOffset.mutate({ deviceId: d.deviceId, offset: d.pixelOffset + 1 })}
+                            >
+                              +1
+                            </Button>
+                            {d.pixelOffset !== 0 && (
+                              <Button
+                                size="small"
+                                color="inherit"
+                                onClick={() => setOffset.mutate({ deviceId: d.deviceId, offset: 0 })}
+                              >
+                                reset
+                              </Button>
+                            )}
+                          </Stack>
+                        </TableCell>
+                        <TableCell align="center">
                           <Button
                             size="small"
-                            color="inherit"
-                            onClick={() => setOffset.mutate({ deviceId: d.deviceId, offset: 0 })}
+                            variant={soloDevice === d.deviceId ? 'contained' : 'outlined'}
+                            onClick={() =>
+                              startSolidDevice.mutate({ deviceId: d.deviceId, color: hexToRgb(color) })
+                            }
                           >
-                            reset
+                            {soloDevice === d.deviceId ? 'Solid ✓' : 'Solid'}
                           </Button>
-                        )}
-                      </Stack>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            <Typography variant="caption" color="text.secondary">
-              Stream the alignment pattern and watch the strip: the first physical LED should be
-              the white one. If it isn&apos;t, nudge the pixel offset ±1 until it lines up.
+                        </TableCell>
+                        <TableCell align="right">
+                          {streamingThis ? (
+                            <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                              {d.deviceFps != null && `${d.deviceFps} fps · `}
+                              {d.framesSent} sent
+                              {d.framesDropped > 0 && (
+                                <Box component="span" sx={{ color: md3.warning }}> · {d.framesDropped} drop</Box>
+                              )}
+                            </Typography>
+                          ) : (
+                            <Typography variant="caption" color="text.disabled">
+                              idle
+                            </Typography>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              <b>Transport:</b> DDP is the default; switch to <b>Legacy UDP</b> (DNRGB on
+              port&nbsp;21324) only as a fallback for a device DDP won&apos;t drive — it&apos;s RGB
+              only, so a white channel stays dark. <b>Rate cap</b> throttles that device&apos;s send
+              rate to spare a slower controller. Stream the alignment pattern and nudge the pixel
+              offset ±1 until the first physical LED is the white one.
             </Typography>
           </>
         )}

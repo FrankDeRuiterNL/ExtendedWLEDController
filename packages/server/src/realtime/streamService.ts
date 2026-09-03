@@ -20,10 +20,18 @@ import {
   paintFrameProducer,
   type DdpTarget,
   type DdpDeviceStats,
+  type RealtimeTransport,
 } from './ddpSender.js';
 import type { RealtimeHub } from './hub.js';
 
 export type StreamMode = 'idle' | 'solid' | 'pattern' | 'scene' | 'paint';
+
+/** Per-device realtime output overrides (defaults: DDP, uncapped). */
+export interface DeviceStreamConfig {
+  transport?: RealtimeTransport;
+  /** fps cap; absent/null = full rate. */
+  maxFps?: number | null;
+}
 
 /** Live pixel-painter stream: a static image DDP'd to one device. */
 export interface PaintStream {
@@ -54,11 +62,18 @@ export interface StreamStatusDTO {
       ledCount: number | null;
       universe: number | null;
       pixelOffset: number;
+      /** Realtime transport in use for this device. */
+      transport: RealtimeTransport;
+      /** fps cap for this device, or null when uncapped. */
+      maxFps: number | null;
     }
   >;
 }
 
 const OFFSETS_KEY = 'ddpPixelOffsets';
+const STREAM_CONFIG_KEY = 'deviceStreamConfig';
+/** Hard ceiling for a per-device fps cap — the sender ticks at 40. */
+export const MAX_DEVICE_FPS = 40;
 
 /**
  * The device state machine for realtime: `idle(preset) → live(streaming) → idle`.
@@ -75,6 +90,8 @@ export class StreamService {
   private scene: Scene | null = null;
   private paint: PaintStream | null = null;
   private streamingIds = new Set<number>();
+  /** When set, solid/pattern drive ONLY this device (per-device test stream). */
+  private soloId: number | null = null;
 
   constructor(
     db: Db,
@@ -123,13 +140,55 @@ export class StreamService {
     if (this.mode !== 'idle') this.refreshTargets();
   }
 
+  private streamConfigs(): Record<string, DeviceStreamConfig> {
+    return this.settings.get<Record<string, DeviceStreamConfig>>(STREAM_CONFIG_KEY, {});
+  }
+
+  private streamConfigFor(deviceId: number): DeviceStreamConfig {
+    return this.streamConfigs()[String(deviceId)] ?? {};
+  }
+
+  /**
+   * Set a device's realtime output overrides — transport (DDP vs the legacy
+   * DNRGB UDP fallback) and/or an fps cap. Defaults (DDP, uncapped) are stored
+   * as an *absent* entry so the settings blob stays small. Applies live.
+   */
+  setStreamConfig(deviceId: number, patch: DeviceStreamConfig): void {
+    const all = this.streamConfigs();
+    const next: DeviceStreamConfig = { ...all[String(deviceId)] };
+
+    if (patch.transport !== undefined) {
+      if (patch.transport === 'dnrgb') next.transport = 'dnrgb';
+      else delete next.transport;
+    }
+    if (patch.maxFps !== undefined) {
+      const n = patch.maxFps;
+      if (n === null || !Number.isFinite(n) || n <= 0 || n >= MAX_DEVICE_FPS) delete next.maxFps;
+      else next.maxFps = Math.round(n);
+    }
+
+    if (Object.keys(next).length === 0) delete all[String(deviceId)];
+    else all[String(deviceId)] = next;
+    this.settings.set(STREAM_CONFIG_KEY, all);
+
+    if (this.mode !== 'idle') this.refreshTargets();
+  }
+
   private targetFor(row: DeviceRow): DdpTarget | null {
     if (!row.led_count || row.led_count <= 0) return null;
     const conn = this.hub.getConnection(row.id);
     if (conn && conn.connection === 'offline') return null;
     const seglc = safeParse<number[]>(row.seglc_json) ?? [];
     const raw = seglc.length ? seglc.reduce((a, b) => a | (b ?? 0), 0) : (row.lc ?? 1);
-    const format: PixelFormat = decodeCapabilities(raw).white ? 'rgbw' : 'rgb';
+
+    const cfg = this.streamConfigFor(row.id);
+    const transport: RealtimeTransport = cfg.transport === 'dnrgb' ? 'dnrgb' : 'ddp';
+    // DNRGB is an RGB-only protocol — force 3 bytes/LED so every producer emits
+    // the right width. The device's white channel is simply not driven on the
+    // fallback path.
+    const format: PixelFormat =
+      transport === 'dnrgb' ? 'rgb' : decodeCapabilities(raw).white ? 'rgbw' : 'rgb';
+
     return {
       deviceId: row.id,
       host: row.host,
@@ -139,6 +198,8 @@ export class StreamService {
       ledCount: row.led_count,
       format,
       pixelOffset: this.pixelOffsets()[String(row.id)] ?? 0,
+      transport,
+      maxFps: typeof cfg.maxFps === 'number' && cfg.maxFps > 0 ? cfg.maxFps : null,
     };
   }
 
@@ -159,7 +220,16 @@ export class StreamService {
       this.refreshPaint();
       return;
     }
-    const targets = this.collectTargets();
+    // solid / pattern
+    let targets = this.collectTargets();
+    if (this.soloId != null) {
+      targets = targets.filter((t) => t.deviceId === this.soloId);
+      if (targets.length === 0) {
+        log.info(`stream: solo device ${this.soloId} unavailable — stopping`);
+        void this.stop();
+        return;
+      }
+    }
     this.streamingIds = new Set(targets.map((t) => t.deviceId));
     this.sender.setTargets(targets);
   }
@@ -214,6 +284,7 @@ export class StreamService {
     this.color = null;
     this.scene = null;
     this.paint = input;
+    this.soloId = input.deviceId;
     const producer = paintFrameProducer(input.pixels, input.segStart, input.brightness);
 
     if (this.mode === 'paint' && this.sender.running && this.streamingIds.has(input.deviceId)) {
@@ -230,12 +301,43 @@ export class StreamService {
     return this.status();
   }
 
-  startSolid(color: [number, number, number]): StreamStatusDTO {
+  /**
+   * Stream a solid colour. With no `deviceId` it goes to every device (the
+   * milestone-3 transport proof). With one, only that device is driven and any
+   * others currently streaming are released — the same release-on-switch
+   * behaviour as {@link startPaint}, so you can solid-test one strip without
+   * disturbing the rest.
+   */
+  startSolid(color: [number, number, number], deviceId?: number): StreamStatusDTO {
     this.color = color;
+    this.scene = null;
+    this.paint = null;
+    this.soloId = deviceId ?? null;
+    const producer = solidFrameProducer(color);
+
+    if (deviceId != null) {
+      const row = this.repo.get(deviceId);
+      const target = row && row.enabled !== 0 ? this.targetFor(row) : null;
+      if (!target) {
+        log.warn(`stream: cannot solid device ${deviceId} — offline or no LEDs`);
+        return this.status();
+      }
+      if (this.mode === 'solid' && this.sender.running && this.streamingIds.has(deviceId) && this.streamingIds.size === 1) {
+        this.sender.setProducer(producer);
+        return this.status();
+      }
+      void this.releaseDevices([...this.streamingIds].filter((id) => id !== deviceId));
+      this.mode = 'solid';
+      this.streamingIds = new Set([deviceId]);
+      this.sender.start([target], producer);
+      log.info(`stream: solid ${color.join(',')} → device ${deviceId}`);
+      return this.status();
+    }
+
     this.mode = 'solid';
     const targets = this.collectTargets();
     this.streamingIds = new Set(targets.map((t) => t.deviceId));
-    this.sender.start(targets, solidFrameProducer(color));
+    this.sender.start(targets, producer);
     log.info(`stream: solid ${color.join(',')} → ${targets.length} device(s)`);
     return this.status();
   }
@@ -247,6 +349,7 @@ export class StreamService {
    */
   startPattern(): StreamStatusDTO {
     this.color = null;
+    this.soloId = null;
     this.mode = 'pattern';
     const targets = this.collectTargets();
     this.streamingIds = new Set(targets.map((t) => t.deviceId));
@@ -263,6 +366,7 @@ export class StreamService {
    */
   startScene(scene: Scene): StreamStatusDTO {
     this.color = null;
+    this.soloId = null;
     this.scene = scene;
     const unknown = unknownEffectIds(scene);
     if (unknown.length) log.warn(`stream: scene "${scene.name}" has unknown effects`, { unknown });
@@ -287,6 +391,7 @@ export class StreamService {
     this.color = null;
     this.scene = null;
     this.paint = null;
+    this.soloId = null;
     this.streamingIds.clear();
     // Release each device from realtime back to its preset.
     await this.releaseDevices(ids);
@@ -296,6 +401,8 @@ export class StreamService {
   status(): StreamStatusDTO {
     const rows = new Map(this.repo.list().map((r) => [r.id, r]));
     const offsets = this.pixelOffsets();
+    const configs = this.streamConfigs();
+    const stats = new Map(this.sender.getStats().map((s) => [s.deviceId, s]));
     return {
       mode: this.mode,
       running: this.sender.running,
@@ -316,17 +423,32 @@ export class StreamService {
         : null,
       epochMs: this.sender.running ? this.sender.epochMs : null,
       fps: 40,
-      devices: this.sender.getStats().map((s) => {
-        const row = rows.get(s.deviceId);
-        return {
-          ...s,
-          name: row?.name ?? `#${s.deviceId}`,
-          connection: this.hub.getConnection(s.deviceId)?.connection ?? 'offline',
-          ledCount: row?.led_count ?? null,
-          universe: row?.dmx_universe ?? null,
-          pixelOffset: offsets[String(s.deviceId)] ?? 0,
-        };
-      }),
+      // One row per enabled device, always — so the Stage page can show and edit
+      // per-device output settings (transport, fps cap, offset) even when idle.
+      // Live send counters come from the sender when it's streaming that device.
+      devices: [...rows.values()]
+        .filter((row) => row.enabled !== 0)
+        .map((row) => {
+          const s = stats.get(row.id);
+          const cfg = configs[String(row.id)] ?? {};
+          return {
+            deviceId: row.id,
+            framesSent: s?.framesSent ?? 0,
+            framesDropped: s?.framesDropped ?? 0,
+            packets: s?.packets ?? 0,
+            bytes: s?.bytes ?? 0,
+            deviceFps: s?.deviceFps ?? null,
+            lastSendMs: s?.lastSendMs ?? 0,
+            pacedUntilMs: s?.pacedUntilMs ?? 0,
+            name: row.name,
+            connection: this.hub.getConnection(row.id)?.connection ?? 'offline',
+            ledCount: row.led_count ?? null,
+            universe: row.dmx_universe ?? null,
+            pixelOffset: offsets[String(row.id)] ?? 0,
+            transport: cfg.transport === 'dnrgb' ? ('dnrgb' as const) : ('ddp' as const),
+            maxFps: typeof cfg.maxFps === 'number' && cfg.maxFps > 0 ? cfg.maxFps : null,
+          };
+        }),
     };
   }
 

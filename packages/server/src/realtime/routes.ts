@@ -4,13 +4,18 @@ import type { DmxService } from '../dmx/service.js';
 import { FLOORPLAN_MIME_TYPES, type FloorplanStore } from '../installation/floorplanStore.js';
 import type { InstallationStore } from '../installation/store.js';
 import { SceneStore, sceneSchema } from '../render/sceneStore.js';
-import type { StreamService } from './streamService.js';
+import { MAX_DEVICE_FPS, type StreamService } from './streamService.js';
 
 const rgb = z.tuple([
   z.number().int().min(0).max(255),
   z.number().int().min(0).max(255),
   z.number().int().min(0).max(255),
 ]);
+
+/** Parse a positive integer `:id` route param, or throw a zod error → HTTP 400. */
+function deviceId(req: { params: Record<string, string> }): number {
+  return z.coerce.number().int().positive().parse(req.params.id);
+}
 
 export function dmxRoutes(dmx: DmxService): Router {
   const r = Router();
@@ -132,6 +137,34 @@ export function streamRoutes(stream: StreamService, scenes: SceneStore): Router 
     try {
       const { color } = z.object({ color: rgb }).parse(req.body);
       res.json(stream.startSolid(color));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Solid to ONE device — test a strip (or a DNRGB toggle) without touching the
+  // others. Releases any devices it drops, like the painter.
+  r.post('/:id/solid', (req, res, next) => {
+    try {
+      const { color } = z.object({ color: rgb }).parse(req.body);
+      res.json(stream.startSolid(color, deviceId(req)));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Per-device realtime output: transport (DDP vs legacy DNRGB UDP) + fps cap.
+  r.put('/:id/config', (req, res, next) => {
+    try {
+      const body = z
+        .object({
+          transport: z.enum(['ddp', 'dnrgb']).optional(),
+          maxFps: z.number().int().min(1).max(MAX_DEVICE_FPS).nullable().optional(),
+        })
+        .refine((v) => v.transport !== undefined || v.maxFps !== undefined, 'empty config')
+        .parse(req.body);
+      stream.setStreamConfig(deviceId(req), body);
+      res.json(stream.status());
     } catch (err) {
       next(err);
     }
