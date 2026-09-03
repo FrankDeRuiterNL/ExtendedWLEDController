@@ -1,6 +1,6 @@
 {
   "name": "@ewc/sink",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "private": true,
   "type": "module",
   "description": "Software WLED sink — a fake device that speaks DDP + the JSON API + WebSocket, for testing without hardware.",

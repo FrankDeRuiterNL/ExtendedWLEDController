@@ -72,19 +72,11 @@ export function AppShell() {
         <Container maxWidth="lg" disableGutters>
           <Toolbar sx={{ gap: 1.5 }}>
             <Box
-              sx={{
-                width: 34,
-                height: 34,
-                borderRadius: 2,
-                display: 'grid',
-                placeItems: 'center',
-                bgcolor: md3.primaryContainer,
-                color: md3.onPrimaryContainer,
-                fontWeight: 700,
-              }}
-            >
-              W
-            </Box>
+              component="img"
+              src="/logo-ewc.svg"
+              alt="Extended WLED Controller"
+              sx={{ width: 34, height: 34, display: 'block' }}
+            />
             <MuiLink
               component={RouterLink}
               to="/devices"
