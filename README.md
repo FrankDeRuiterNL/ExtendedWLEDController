@@ -109,6 +109,10 @@ outside it fall through to the layers below, overlapping boxes blend).
   region, order, opacity, background, a Layout change — **hot-swaps** the live
   stream, phase-locked, with no restart or re-blank, so the wall tracks the
   preview exactly. Switching scenes mid-stream asks first.
+- **Unsaved work survives navigation** — an edited (or streaming) scene is kept
+  when you leave the page and restored on return, so you can still save it; the
+  hot-swap link re-attaches unless the wire has since moved on to something else
+  (a Rundown cue).
 - Scenes save to SQLite.
 
 ### Rundown

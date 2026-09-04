@@ -78,9 +78,26 @@ import { useStopStream, useStreamStatus } from '../api/stage.js';
 import { useInstallation } from '../api/stage.js';
 import { useDevices } from '../api/devices.js';
 import { md3 } from '../theme/tokens.js';
+import { clearStudioDraft, loadStudioDraft, saveStudioDraft } from './studioDraft.js';
 
 let seq = 0;
 const newLayerId = () => `l-${Date.now().toString(36)}-${seq++}`;
+
+/**
+ * A restored draft can be minutes old, so every video layer's wall-clock
+ * transport anchor is stale. Rebuild it from the persisted `playbackType` —
+ * the same thing a freshly loaded saved scene does — so `loop` clips run and
+ * `hold` / `hide` clips sit at the start instead of restoring "already ended".
+ */
+function reviveDraftTransport(scene: Scene): Scene {
+  const now = Date.now();
+  for (const l of scene.layers) {
+    if (l.media?.kind === 'video') {
+      l.media.playback = defaultMediaPlayback(l.media.playbackType, now);
+    }
+  }
+  return scene;
+}
 
 const pct = (n: number) => Math.round(n * 100);
 const isFullRect = (r: LayerRect) => r.x <= 0 && r.y <= 0 && r.w >= 1 && r.h >= 1;
@@ -719,17 +736,29 @@ export function StudioPage() {
   const startScene = useStartScene();
   const stopStream = useStopStream();
 
-  const [sceneId, setSceneId] = useState<number | null>(null);
+  /** An unsaved editor state stashed before the user navigated away — restored
+   *  here so leaving Scenes (even mid-stream) no longer throws the scene out. */
+  const restored = useRef(loadStudioDraft());
+
+  const [sceneId, setSceneId] = useState<number | null>(() => restored.current?.sceneId ?? null);
   /** Set only when the user explicitly picks a scene to load, so a save (which
    *  also updates the cached scene) never clobbers the editor or drops live-sync. */
   const [pendingLoad, setPendingLoad] = useState<number | null>(null);
   const { data: loaded } = useScene(sceneId);
-  const [scene, setScene] = useState<Scene>(() => structuredClone(EMPTY_SCENE));
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
+  const [scene, setScene] = useState<Scene>(() =>
+    restored.current
+      ? reviveDraftTransport(structuredClone(restored.current.scene))
+      : structuredClone(EMPTY_SCENE),
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => restored.current?.selectedLayerId ?? null,
+  );
+  const [dirty, setDirty] = useState(() => restored.current?.dirty ?? false);
   /** True once this editor's scene has been pushed to the stream — every later
-   *  edit then hot-swaps the live stream so the wall tracks the preview. */
-  const [liveSync, setLiveSync] = useState(false);
+   *  edit then hot-swaps the live stream so the wall tracks the preview. A
+   *  restored draft keeps it optimistically; the reconcile effect below drops it
+   *  if the wire turns out to be running something else (e.g. a Rundown cue). */
+  const [liveSync, setLiveSync] = useState(() => restored.current?.liveSync ?? false);
 
   /** Floorplan overlay on the preview — independent of the Layout page's toggle. */
   const [showFloorplan, setShowFloorplan] = useState(() => {
@@ -879,9 +908,11 @@ export function StudioPage() {
   const sceneRunning = running && stream?.mode === 'scene';
   const streamingThis = sceneRunning && liveSync;
 
-  /** Switch scenes — but confirm first if a stream is running. */
+  /** Switch scenes — but confirm first if a stream is running. Re-picking the
+   *  current scene is a no-op unless the editor holds unsaved changes, in which
+   *  case it reloads the saved version (i.e. discards the restored draft). */
   const requestLoadScene = (id: number | null) => {
-    if (id === sceneId) return;
+    if (id === sceneId && !dirty) return;
     if (sceneRunning) setConfirmLoad({ id });
     else loadScene(id);
   };
@@ -929,10 +960,30 @@ export function StudioPage() {
   };
 
   // Stream ended (or switched away from scene mode) elsewhere → drop live-sync.
+  // Wait for the first real status: on a fresh mount `stream` is undefined, and
+  // a restored draft must not be torn down before we know what's on the wire.
   useEffect(() => {
-    if (!sceneRunning) stopSync();
+    if (stream && !sceneRunning) stopSync();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneRunning]);
+  }, [stream, sceneRunning]);
+
+  // Reconcile a restored draft against the live stream, once, when the first
+  // status arrives. If the wire is running this scene, re-arm the hot-swap push
+  // queue; if it's running something else (a Rundown cue keeps `mode === 'scene'`
+  // without claiming the editor), drop live-sync so we don't overwrite it.
+  const reconciled = useRef(!restored.current?.liveSync);
+  useEffect(() => {
+    if (reconciled.current || !stream) return;
+    reconciled.current = true;
+    const mine =
+      stream.mode === 'scene' &&
+      !!stream.scene &&
+      stream.scene.name === scene.name &&
+      stream.scene.layerCount === scene.layers.length;
+    if (mine) push.current.enabled = true;
+    else stopSync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stream]);
 
   useEffect(() => {
     if (!liveSync || !sceneRunning) return;
@@ -940,6 +991,17 @@ export function StudioPage() {
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scene, liveSync, sceneRunning]);
+
+  // Stash the editor across navigation whenever it holds something worth keeping
+  // — unsaved edits, or a scene that's on the wire — and clear it once saved and
+  // idle so a clean revisit starts empty.
+  useEffect(() => {
+    if (dirty || liveSync) {
+      saveStudioDraft({ scene, sceneId, dirty, liveSync, selectedLayerId: selectedId });
+    } else {
+      clearStudioDraft();
+    }
+  }, [scene, sceneId, dirty, liveSync, selectedId]);
 
   const deviceGains = useMemo(() => {
     const m: Record<number, readonly [number, number, number]> = {};
