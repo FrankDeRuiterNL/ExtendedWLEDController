@@ -28,7 +28,6 @@ interface Props {
    * stream is unaffected — this is a preview-only view mode.
    */
   showOutputOnly?: boolean;
-  resolution?: number;
   /** Enable the layer-region overlay (drag to move, corners to resize). */
   editable?: boolean;
   selectedLayerId?: string | null;
@@ -194,7 +193,6 @@ export function CanvasPreview({
   showFixtures = true,
   showFloorplan = false,
   showOutputOnly = false,
-  resolution = 200,
   editable = false,
   selectedLayerId = null,
   onSelectLayer,
@@ -332,13 +330,37 @@ export function CanvasPreview({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const w = Math.max(16, Math.round(resolution));
-    const h = Math.max(9, Math.round(w / aspect));
-    canvas.width = w;
-    canvas.height = h;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const img = ctx.createImageData(w, h);
+
+    // The pixel canvas is rendered near its on-screen size (× dpr, capped) so the
+    // browser barely has to scale it — a fixed low resolution stretched to the
+    // preview box is what made everything look soft. `sampleScene` runs per
+    // pixel, though, so a heavy layer stack can't afford an unbounded canvas:
+    // an EMA of the per-frame sample cost walks the resolution back down when a
+    // scene is expensive and back up when it's cheap.
+    const RES_MIN = 200;
+    const RES_MAX = 480;
+    const dprNow = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    const boxTargetW = () =>
+      Math.round((canvas.getBoundingClientRect().width || RES_MIN) * dprNow());
+    let w = Math.max(16, Math.min(RES_MAX, Math.max(RES_MIN, boxTargetW())));
+    let h = Math.max(9, Math.round(w / aspect));
+    canvas.width = w;
+    canvas.height = h;
+    let img = ctx.createImageData(w, h);
+    const applyRes = (next: number) => {
+      const nw = Math.max(RES_MIN, Math.min(RES_MAX, Math.round(next)));
+      const nh = Math.max(9, Math.round(nw / aspect));
+      if (nw === w && nh === h) return;
+      w = nw;
+      h = nh;
+      canvas.width = w;
+      canvas.height = h;
+      img = ctx.createImageData(w, h);
+    };
+    let sampleEma = 0;
+    let adaptTick = 0;
 
     // Fixture overlay: sized to its own on-screen box × devicePixelRatio so the
     // thin lines stay crisp regardless of how big the preview is rendered.
@@ -448,6 +470,7 @@ export function CanvasPreview({
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, w, h);
       } else {
+        const t0 = performance.now();
         const data = img.data;
         for (let py = 0; py < h; py++) {
           for (let px = 0; px < w; px++) {
@@ -460,6 +483,15 @@ export function CanvasPreview({
           }
         }
         ctx.putImageData(img, 0, 0);
+
+        const dt = performance.now() - t0;
+        sampleEma = sampleEma ? sampleEma * 0.8 + dt * 0.2 : dt;
+        if (++adaptTick % 30 === 0) {
+          const target = Math.max(RES_MIN, Math.min(RES_MAX, boxTargetW()));
+          if (w > target * 1.15) applyRes(target);
+          else if (sampleEma > 24 && w > RES_MIN) applyRes(w * 0.85);
+          else if (sampleEma < 12 && w < target) applyRes(Math.min(w * 1.15, target));
+        }
       }
 
       // Fixtures: crisp, on their own display-resolution overlay. Each LED's
@@ -490,7 +522,7 @@ export function CanvasPreview({
       cancelAnimationFrame(raf);
       ro?.disconnect();
     };
-  }, [aspect, resolution]);
+  }, [aspect]);
 
   const onPointerDown = (
     e: React.PointerEvent,
@@ -549,7 +581,15 @@ export function CanvasPreview({
       <Box
         component="canvas"
         ref={canvasRef}
-        sx={{ width: '100%', height: '100%', display: 'block' }}
+        sx={{
+          width: '100%',
+          height: '100%',
+          display: 'block',
+          // The canvas backing store is rendered near its on-screen size; keep
+          // whatever residual upscale remains hard-edged so a swept line stays a
+          // clean one-pixel edge instead of a soft two-pixel gradient.
+          imageRendering: 'pixelated',
+        }}
       />
 
       {showFloorplan && installation?.floorplan && (() => {

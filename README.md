@@ -101,9 +101,10 @@ outside it fall through to the layers below, overlapping boxes blend).
   colour. The browser rasterises it and it pixel-maps onto the fixtures like a
   media layer.
 - **Live preview** — a canvas that runs the *same* compositor as the DDP loop,
-  with the fixture LEDs and names overlaid. A **Show output** mode blacks the
-  canvas and lights only the fixtures as they'd appear on the wall; a **Show
-  floorplan** toggle overlays the plan.
+  with the fixture LEDs and names overlaid, rendered near its on-screen size so
+  edges stay sharp. A **Show output** mode blacks the canvas and lights only the
+  fixtures as they'd appear on the wall; an independent **Show floorplan** toggle
+  overlays the plan (it stays visible in output mode too).
 - **Stream the scene** to every fixture. While it streams, *every* edit — params,
   region, order, opacity, background, a Layout change — **hot-swaps** the live
   stream, phase-locked, with no restart or re-blank, so the wall tracks the

@@ -69,20 +69,31 @@ function rasterize(spec: TextLayerSpec): { rgba: Uint8ClampedArray; width: numbe
 
   // Downscale so the long edge is ≤ MEDIA_MAX_EDGE, exactly like an uploaded image.
   const scale = Math.min(1, MEDIA_MAX_EDGE / Math.max(w, h));
+  let out: Uint8ClampedArray;
+  let ow = w;
+  let oh = h;
   if (scale >= 1) {
-    return { rgba: ctx.getImageData(0, 0, w, h).data, width: w, height: h };
+    out = ctx.getImageData(0, 0, w, h).data;
+  } else {
+    ow = Math.max(1, Math.round(w * scale));
+    oh = Math.max(1, Math.round(h * scale));
+    const small = document.createElement('canvas');
+    small.width = ow;
+    small.height = oh;
+    const sctx = small.getContext('2d', { willReadFrequently: true });
+    if (!sctx) throw new Error('canvas 2d context unavailable');
+    // Nearest-neighbour, not smoothed: the sampler that maps this raster onto the
+    // LEDs is nearest-neighbour too, so a smoothed downscale would spread every
+    // glyph edge across two LEDs at half brightness ("fuzzy" text on the wire).
+    sctx.imageSmoothingEnabled = false;
+    sctx.drawImage(canvas, 0, 0, ow, oh);
+    out = sctx.getImageData(0, 0, ow, oh).data;
   }
-  const sw = Math.max(1, Math.round(w * scale));
-  const sh = Math.max(1, Math.round(h * scale));
-  const small = document.createElement('canvas');
-  small.width = sw;
-  small.height = sh;
-  const sctx = small.getContext('2d', { willReadFrequently: true });
-  if (!sctx) throw new Error('canvas 2d context unavailable');
-  sctx.imageSmoothingEnabled = true;
-  sctx.imageSmoothingQuality = 'high';
-  sctx.drawImage(canvas, 0, 0, sw, sh);
-  return { rgba: sctx.getImageData(0, 0, sw, sh).data, width: sw, height: sh };
+
+  // Collapse the alpha channel to 1-bit so every pixel is either fully lit or
+  // fully off — a clean stencil that maps predictably onto the fixture pixels.
+  for (let i = 3; i < out.length; i += 4) out[i] = out[i]! >= 128 ? 255 : 0;
+  return { rgba: out, width: ow, height: oh };
 }
 
 /**

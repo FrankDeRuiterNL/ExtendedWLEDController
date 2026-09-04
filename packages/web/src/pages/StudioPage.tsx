@@ -1021,19 +1021,23 @@ export function StudioPage() {
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 360px' } }}>
         {/* preview + scene management */}
         <Stack spacing={2}>
-          <CanvasPreview
-            scene={scene}
-            installation={installation}
-            playing
-            editable={!showOutput}
-            showFloorplan={showFloorplan && !showOutput}
-            showOutputOnly={showOutput}
-            deviceGains={deviceGains}
-            epochMs={streamingThis ? stream?.epochMs ?? null : null}
-            selectedLayerId={selectedId}
-            onSelectLayer={setSelectedId}
-            onLayerRect={(id, rect) => patchLayer(id, { rect })}
-          />
+          <Card>
+            <CardContent sx={{ p: 1, '&:last-child': { pb: 1 } }}>
+              <CanvasPreview
+                scene={scene}
+                installation={installation}
+                playing
+                editable={!showOutput}
+                showFloorplan={showFloorplan}
+                showOutputOnly={showOutput}
+                deviceGains={deviceGains}
+                epochMs={streamingThis ? stream?.epochMs ?? null : null}
+                selectedLayerId={selectedId}
+                onSelectLayer={setSelectedId}
+                onLayerRect={(id, rect) => patchLayer(id, { rect })}
+              />
+            </CardContent>
+          </Card>
           <Stack direction="row" alignItems="center" spacing={2} sx={{ px: 0.5 }} flexWrap="wrap" useFlexGap>
             <Stack direction="row" alignItems="center" spacing={1}>
               <Switch
@@ -1050,7 +1054,6 @@ export function StudioPage() {
                 <Switch
                   size="small"
                   checked={showFloorplan}
-                  disabled={showOutput}
                   onChange={(e) => toggleFloorplan(e.target.checked)}
                 />
                 <Typography variant="body2" color="text.secondary">
@@ -1061,8 +1064,8 @@ export function StudioPage() {
           </Stack>
           {showOutput && (
             <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, mt: -1 }}>
-              Preview only — the fixtures show their live output colour and the layers are hidden.
-              The stream keeps running unchanged.
+              Preview only — the fixtures show their live output colour over a black canvas (the
+              floorplan still shows if enabled). The stream keeps running unchanged.
             </Typography>
           )}
           <Card>

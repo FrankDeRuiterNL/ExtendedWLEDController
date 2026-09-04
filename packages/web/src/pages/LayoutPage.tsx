@@ -529,9 +529,9 @@ export function LayoutPage() {
         </Alert>
       )}
 
-      <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 320px' } }}>
+      <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 360px' } }}>
         <Card>
-          <CardContent sx={{ p: 1 }}>
+          <CardContent sx={{ p: 1, '&:last-child': { pb: 1 } }}>
             <Box
               component="svg"
               ref={svgRef}
@@ -552,6 +552,7 @@ export function LayoutPage() {
                 width: '100%',
                 aspectRatio: `${inst.canvas.width} / ${inst.canvas.height}`,
                 bgcolor: md3.surfaceContainerLowest,
+                border: `1px solid ${md3.outlineVariant}`,
                 borderRadius: 2,
                 touchAction: 'none',
               }}
