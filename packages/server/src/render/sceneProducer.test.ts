@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeMediaLayer, makeTextLayer, type Installation, type Scene } from '@ewc/core';
+import {
+  customEffectToDef,
+  makeMediaLayer,
+  makeTextLayer,
+  type Installation,
+  type Scene,
+} from '@ewc/core';
 import { MediaStore } from '../media/mediaStore.js';
 import type { DdpTarget } from '../realtime/ddpSender.js';
 import { sceneFrameProducer } from './sceneProducer.js';
@@ -169,5 +175,79 @@ describe('sceneFrameProducer — media layers', () => {
     };
     const buf = sceneFrameProducer(scene, installation, media)(target({ ledCount: 2 }), 0);
     expect([...buf]).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+});
+
+describe('sceneFrameProducer — custom effects (M10b)', () => {
+  it('writes a custom effect\'s colour to the wire when its map is supplied', () => {
+    const installation: Installation = {
+      canvas: { width: 10, height: 10 },
+      fixtures: [
+        {
+          id: 'f',
+          deviceId: 1,
+          name: 's',
+          startIndex: 0,
+          geometry: { kind: 'strip', count: 2 },
+          transform: { position: { x: 5, y: 5 }, rotationDeg: 0, size: { x: 10, y: 1 } },
+          enabled: true,
+        },
+      ],
+    };
+    const scene: Scene = {
+      name: 't',
+      background: [0, 0, 0],
+      layers: [
+        { id: 'l', effectId: 'custom:1', params: {}, blend: 'normal', opacity: 1, enabled: true },
+      ],
+    };
+    const customEffects = new Map([
+      [
+        'custom:1',
+        customEffectToDef({
+          id: 'custom:1',
+          name: 'Test',
+          layers: [
+            {
+              id: 'a',
+              effectId: 'solid',
+              params: { color: [40, 50, 60] },
+              blend: 'normal',
+              opacity: 1,
+              enabled: true,
+            },
+          ],
+        }),
+      ],
+    ]);
+
+    const buf = sceneFrameProducer(scene, installation, undefined, customEffects)(target({ ledCount: 2 }), 0);
+    expect([...buf]).toEqual([40, 50, 60, 40, 50, 60]);
+  });
+
+  it('leaves LEDs on the background colour when the custom-effect map is omitted', () => {
+    const installation: Installation = {
+      canvas: { width: 10, height: 10 },
+      fixtures: [
+        {
+          id: 'f',
+          deviceId: 1,
+          name: 's',
+          startIndex: 0,
+          geometry: { kind: 'strip', count: 2 },
+          transform: { position: { x: 5, y: 5 }, rotationDeg: 0, size: { x: 10, y: 1 } },
+          enabled: true,
+        },
+      ],
+    };
+    const scene: Scene = {
+      name: 't',
+      background: [7, 7, 7],
+      layers: [
+        { id: 'l', effectId: 'custom:1', params: {}, blend: 'normal', opacity: 1, enabled: true },
+      ],
+    };
+    const buf = sceneFrameProducer(scene, installation)(target({ ledCount: 2 }), 0);
+    expect([...buf]).toEqual([7, 7, 7, 7, 7, 7]);
   });
 });

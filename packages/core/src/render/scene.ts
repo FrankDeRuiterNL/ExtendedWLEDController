@@ -13,7 +13,7 @@
 import { blend, type BlendMode } from './blend.js';
 import { clamp8, luma } from './color.js';
 import { getEffect } from './registry.js';
-import { withParamDefaults, type ParamValues, type RGB, type RGBA } from './types.js';
+import { withParamDefaults, type EffectDef, type ParamValues, type RGB, type RGBA } from './types.js';
 
 export interface LayerMask {
   effectId: string;
@@ -327,14 +327,17 @@ export const EMPTY_SCENE: Scene = {
 /**
  * Effect ids in the scene that this build doesn't know — those layers are
  * skipped by {@link sampleScene}. Call at stream start / on save to surface the
- * problem instead of silently dropping layers in the 40 Hz loop.
+ * problem instead of silently dropping layers in the 40 Hz loop. Pass
+ * `customEffects` (built-ins ∪ custom, keyed by id) so a saved custom effect
+ * doesn't falsely show up as unknown.
  */
-export function unknownEffectIds(scene: Scene): string[] {
+export function unknownEffectIds(scene: Scene, customEffects?: Map<string, EffectDef>): string[] {
+  const resolve = (id: string) => getEffect(id) ?? customEffects?.get(id);
   const out = new Set<string>();
   for (const l of scene.layers) {
     if (l.media || l.text || !l.effectId) continue; // media / text layers (and empty ids) don't use an effect
-    if (!getEffect(l.effectId)) out.add(l.effectId);
-    if (l.mask && !getEffect(l.mask.effectId)) out.add(l.mask.effectId);
+    if (!resolve(l.effectId)) out.add(l.effectId);
+    if (l.mask && !resolve(l.mask.effectId)) out.add(l.mask.effectId);
   }
   return [...out];
 }
@@ -342,7 +345,10 @@ export function unknownEffectIds(scene: Scene): string[] {
 /**
  * Composite one canvas point. x,y in [0,1] (y down), t in seconds. `mediaFrames`
  * supplies the current frame for any media layer (by layer id); omit it and
- * media layers contribute nothing.
+ * media layers contribute nothing. `customEffects` (built-ins ∪ custom, keyed
+ * by id) lets a layer's `effectId` resolve to a saved custom effect in
+ * addition to a built-in; omit it and only built-ins resolve (today's
+ * behaviour, unchanged).
  */
 export function sampleScene(
   scene: Scene,
@@ -352,7 +358,9 @@ export function sampleScene(
   mediaFrames?: MediaFrames,
   /** Canvas width ÷ height — only needed so a rotated layer box doesn't shear. */
   aspect = 1,
+  customEffects?: Map<string, EffectDef>,
 ): RGB {
+  const resolve = (id: string) => getEffect(id) ?? customEffects?.get(id);
   let dst: RGB = [
     clamp8(scene.background[0]),
     clamp8(scene.background[1]),
@@ -363,7 +371,7 @@ export function sampleScene(
     if (!layer.enabled || layer.opacity <= 0) continue;
 
     const framed = !!(layer.media || layer.text); // pixels come from a MediaFrames provider
-    const def = framed ? undefined : getEffect(layer.effectId);
+    const def = framed ? undefined : resolve(layer.effectId);
     if (!framed && !def) continue; // unknown effect — see unknownEffectIds()
 
     // Map the canvas point into this layer's box; skip if it falls outside.
@@ -389,7 +397,7 @@ export function sampleScene(
     if (a <= 0) continue;
 
     if (layer.mask) {
-      const maskDef = getEffect(layer.mask.effectId);
+      const maskDef = resolve(layer.mask.effectId);
       if (maskDef) {
         const mc = maskDef.render(lx, ly, t, withParamDefaults(maskDef, layer.mask.params));
         let m = (luma([mc[0], mc[1], mc[2]]) / 255) * mc[3];

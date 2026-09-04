@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -14,6 +15,7 @@ import {
   Divider,
   IconButton,
   LinearProgress,
+  Link,
   Menu,
   MenuItem,
   Stack,
@@ -64,6 +66,7 @@ import {
 } from '@ewc/core';
 import { CanvasPreview } from '../components/CanvasPreview.js';
 import { ParamControl, hexToRgb, rgbToHex } from '../components/ParamControl.js';
+import { customEffectsMap, useCustomEffects } from '../api/customEffects.js';
 import { mediaUrl, useUploadMedia, type UploadedMedia } from '../api/media.js';
 import { rasterizeAndUploadText } from '../api/text.js';
 import {
@@ -747,6 +750,8 @@ function TextLayerInspector({
 export function StudioPage() {
   const { data: sceneList } = useScenes();
   const { data: installation } = useInstallation();
+  const { data: customEffectRows } = useCustomEffects();
+  const customEffects = useMemo(() => customEffectsMap(customEffectRows), [customEffectRows]);
   const { data: devices } = useDevices();
   const { data: stream } = useStreamStatus();
   const create = useCreateScene();
@@ -921,7 +926,10 @@ export function StudioPage() {
   const selectedIsText = !!selected && selected.text != null;
   const selectedIsMedia = !!selected && !selectedIsText && selected.media !== undefined;
   const selectedDef =
-    selected && !selectedIsMedia && !selectedIsText ? getEffect(selected.effectId) : undefined;
+    selected && !selectedIsMedia && !selectedIsText
+      ? getEffect(selected.effectId) ?? customEffects.get(selected.effectId)
+      : undefined;
+  const selectedIsCustomEffect = !!selected?.effectId.startsWith('custom:');
 
   const running = stream?.running ?? false;
   const sceneRunning = running && stream?.mode === 'scene';
@@ -1116,6 +1124,7 @@ export function StudioPage() {
                 showFloorplan={showFloorplan}
                 showOutputOnly={showOutput}
                 deviceGains={deviceGains}
+                customEffects={customEffects}
                 epochMs={streamingThis ? stream?.epochMs ?? null : null}
                 selectedLayerId={selectedId}
                 onSelectLayer={setSelectedId}
@@ -1283,7 +1292,7 @@ export function StudioPage() {
 
               <Stack spacing={0.5} sx={{ mt: 1 }}>
                 {[...scene.layers].reverse().map((l) => {
-                  const def = getEffect(l.effectId);
+                  const def = getEffect(l.effectId) ?? customEffects.get(l.effectId);
                   const isSel = l.id === selectedId;
                   const label =
                     l.name?.trim() ||
@@ -1393,6 +1402,14 @@ export function StudioPage() {
                         {e.name}
                       </MenuItem>
                     ))}
+                    {!!customEffectRows?.length && [
+                      <Divider key="custom-divider" />,
+                      ...customEffectRows.map((c) => (
+                        <MenuItem key={`custom:${c.id}`} value={`custom:${c.id}`}>
+                          {c.name}
+                        </MenuItem>
+                      )),
+                    ]}
                   </TextField>
 
                   <Stack direction="row" spacing={1}>
@@ -1448,14 +1465,24 @@ export function StudioPage() {
                     </Typography>
                   </Divider>
 
-                  {selectedDef.params.map((d) => (
-                    <ParamControl
-                      key={d.key}
-                      def={d}
-                      value={selected.params[d.key]}
-                      onChange={(v) => patchLayer(selected.id, { params: { ...selected.params, [d.key]: v } })}
-                    />
-                  ))}
+                  {selectedIsCustomEffect ? (
+                    <Typography variant="caption" color="text.secondary">
+                      This is a custom effect — its look is baked into its recipe. Edit it on the{' '}
+                      <Link component={RouterLink} to="/effects">
+                        Effects page
+                      </Link>
+                      .
+                    </Typography>
+                  ) : (
+                    selectedDef.params.map((d) => (
+                      <ParamControl
+                        key={d.key}
+                        def={d}
+                        value={selected.params[d.key]}
+                        onChange={(v) => patchLayer(selected.id, { params: { ...selected.params, [d.key]: v } })}
+                      />
+                    ))
+                  )}
 
                   <Divider>
                     <Typography variant="caption" color="text.secondary">
@@ -1488,10 +1515,18 @@ export function StudioPage() {
                         }
                       >
                         {listEffects().map((e) => (
-                          <MenuItem key={e.id} value={e.id}>
+                          <MenuItem key={`mask-${e.id}`} value={e.id}>
                             {e.name}
                           </MenuItem>
                         ))}
+                        {!!customEffectRows?.length && [
+                          <Divider key="mask-custom-divider" />,
+                          ...customEffectRows.map((c) => (
+                            <MenuItem key={`mask-custom:${c.id}`} value={`custom:${c.id}`}>
+                              {c.name}
+                            </MenuItem>
+                          )),
+                        ]}
                       </TextField>
                       <Stack direction="row" alignItems="center" justifyContent="space-between">
                         <Typography variant="body2">Invert mask</Typography>
@@ -1503,7 +1538,7 @@ export function StudioPage() {
                           }
                         />
                       </Stack>
-                      {(getEffect(selected.mask.effectId)?.params ?? []).map((d) => (
+                      {(getEffect(selected.mask.effectId)?.params ?? customEffects.get(selected.mask.effectId)?.params ?? []).map((d) => (
                         <ParamControl
                           key={d.key}
                           def={d}

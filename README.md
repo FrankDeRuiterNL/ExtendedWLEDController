@@ -124,10 +124,19 @@ non-square canvas doesn't shear.
 A gallery of every built-in effect with a live-animated thumbnail, and a larger
 preview against your real fixture layout (the same preview and per-effect
 parameter controls Scenes uses) with the params live-editable so you can dial
-one in before using it in a Scene. Preview-only — it never touches the wire;
-stream one by adding an FX layer on the Scenes page. Custom effects (build your
-own from a stack of primitives, or duplicate a built-in to retune its
-parameters) are planned for a later update.
+one in before using it in a Scene.
+
+- **Custom effects** — build your own by stacking existing effects with a
+  blend mode, opacity and an optional mask each, exactly like a Scene's own
+  layer stack, then save it as a new effect with its own name. Use it on a
+  Scene's FX layer (or as a mask) just like a built-in — it renders identically
+  on the preview and the wire. A custom effect's look is baked into its recipe
+  (edit the recipe to change it — no exposed per-use parameters yet).
+- **Duplicate a built-in** to start a new custom effect pre-loaded with its
+  current parameter values as a single layer — the built-in itself is never
+  modified.
+- Editing a custom effect that's currently live on a streaming Scene hot-swaps
+  immediately, the same as any other live edit.
 
 ### Rundown
 
@@ -394,6 +403,7 @@ WLED 16.0.0 (ESP32) and 16.0.1 (QuinLED Dig-Quad), including a genuine truncated
 | PUT | `/api/stream/:id/config` | transport / fps cap / white balance |
 | PUT | `/api/stream/:id/pixel-offset` | per-device LED offset compensation |
 | GET/POST | `/api/scenes` · GET/PUT/DELETE `/api/scenes/:id` | saved scenes |
+| GET/POST | `/api/custom-effects` · GET/PUT/DELETE `/api/custom-effects/:id` | saved custom effect recipes |
 | GET/PUT | `/api/rundown` | the cue list |
 | GET | `/api/rundown/status` | live playback state |
 | POST | `/api/rundown/go` · `/api/rundown/go/:cueId` · `/api/rundown/stop` | GO / jump / stop |

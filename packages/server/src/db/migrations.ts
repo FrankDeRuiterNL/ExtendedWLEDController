@@ -178,6 +178,25 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 6,
+    name: 'M10b — custom effects',
+    up: (db) => {
+      // A saved custom effect: a small stack of built-in-effect layers
+      // (RecipeLayer[]) composited exactly like a Scene's own layer stack.
+      // `data_json` holds `{blurb?, layers}`; the runtime id exposed to
+      // Layer.effectId is `custom:<id>`, never persisted here.
+      db.exec(`
+        CREATE TABLE custom_effects (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          name       TEXT NOT NULL,
+          data_json  TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+    },
+  },
 ];
 
 /**

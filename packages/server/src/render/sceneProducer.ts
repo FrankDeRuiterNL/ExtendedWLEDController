@@ -3,6 +3,7 @@ import {
   mapInstallation,
   resolveMediaFrameIndex,
   sampleScene,
+  type EffectDef,
   type Installation,
   type MappedLed,
   type MediaFrame,
@@ -158,6 +159,9 @@ export function sceneFrameProducer(
   scene: Scene,
   installation: Installation,
   media?: MediaStore,
+  /** Custom effects, keyed by their `custom:<id>` runtime id — built once by
+   *  the caller (`CustomEffectStore.toEffectDefMap()`), never re-read here. */
+  customEffects?: Map<string, EffectDef>,
 ): FrameProducer {
   const byDevice = new Map<number, MappedLed[]>();
   for (const led of mapInstallation(installation)) {
@@ -184,7 +188,7 @@ export function sceneFrameProducer(
     for (const led of leds) {
       const o = led.index * bpl;
       if (o < 0 || o + bpl > buf.length) continue;
-      const c = sampleScene(scene, led.x, led.y, t, mediaFrames, aspect);
+      const c = sampleScene(scene, led.x, led.y, t, mediaFrames, aspect, customEffects);
       buf[o] = c[0];
       buf[o + 1] = c[1];
       buf[o + 2] = c[2];

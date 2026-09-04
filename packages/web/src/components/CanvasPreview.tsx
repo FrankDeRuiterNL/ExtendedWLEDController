@@ -5,6 +5,7 @@ import {
   mapFixture,
   resolveMediaPositionMs,
   sampleScene,
+  type EffectDef,
   type Installation,
   type LayerRect,
   type MediaFrame,
@@ -38,6 +39,10 @@ interface Props {
   epochMs?: number | null;
   /** Per-device RGB gain (white balance) applied to that device's fixture dots. */
   deviceGains?: Record<number, readonly [number, number, number]>;
+  /** Custom effects (built via the Effects page), keyed by their `custom:<id>`
+   *  runtime id — lets a layer's `effectId` resolve to one in addition to a
+   *  built-in. Omit and only built-ins resolve. */
+  customEffects?: Map<string, EffectDef>;
 }
 
 type Corner = 'nw' | 'ne' | 'sw' | 'se';
@@ -131,6 +136,7 @@ function drawFixtures(
   t: number,
   mediaFrames: MediaFrames | undefined,
   deviceGains: Record<number, readonly [number, number, number]> | undefined,
+  customEffects: Map<string, EffectDef> | undefined,
   /** "As-output" view — canvas is black, so lean into the lit core + a glow. */
   outputMode = false,
 ): void {
@@ -155,7 +161,7 @@ function drawFixtures(
     const px = pts.map((p) => [p.x * cw, p.y * ch] as const);
     const g = deviceGains?.[f.deviceId];
     const cols = pts.map((p) => {
-      const c = sampleScene(scene, p.x, p.y, t, mediaFrames, aspect);
+      const c = sampleScene(scene, p.x, p.y, t, mediaFrames, aspect, customEffects);
       return g
         ? `rgb(${clamp255(c[0] * g[0])},${clamp255(c[1] * g[1])},${clamp255(c[2] * g[2])})`
         : `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
@@ -238,6 +244,7 @@ export function CanvasPreview({
   onLayerRect,
   epochMs = null,
   deviceGains,
+  customEffects,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   /** Crisp, display-resolution overlay for the fixtures (the pixel canvas below
@@ -344,6 +351,7 @@ export function CanvasPreview({
     showOutputOnly,
     epochMs,
     deviceGains,
+    customEffects,
     mediaImages,
   });
   state.current = {
@@ -354,6 +362,7 @@ export function CanvasPreview({
     showOutputOnly,
     epochMs,
     deviceGains,
+    customEffects,
     mediaImages,
   };
   const drag = useRef<
@@ -529,7 +538,7 @@ export function CanvasPreview({
         const data = img.data;
         for (let py = 0; py < h; py++) {
           for (let px = 0; px < w; px++) {
-            const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t, mediaFrames, aspect);
+            const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t, mediaFrames, aspect, s.customEffects);
             const o = (py * w + px) * 4;
             data[o] = c[0];
             data[o + 1] = c[1];
@@ -562,6 +571,7 @@ export function CanvasPreview({
             t,
             mediaFrames,
             s.deviceGains,
+            s.customEffects,
             s.showOutputOnly,
           );
         } else {

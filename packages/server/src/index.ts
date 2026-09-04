@@ -20,6 +20,8 @@ import { PaintService } from './paint/service.js';
 import { PixelSceneStore } from './paint/pixelSceneStore.js';
 import { BakeService } from './paint/bakeService.js';
 import { SceneStore } from './render/sceneStore.js';
+import { CustomEffectStore } from './render/customEffectStore.js';
+import { customEffectErrorHandler, customEffectRoutes } from './render/customEffectRoutes.js';
 import { StreamService } from './realtime/streamService.js';
 import { RundownStore } from './rundown/store.js';
 import { RundownEngine } from './rundown/engine.js';
@@ -47,7 +49,8 @@ async function main(): Promise<void> {
   const ffmpegAvailable = await probeFfmpeg();
   log.info(ffmpegAvailable ? 'ffmpeg found — video media layers enabled' : 'ffmpeg not found — video media layers disabled');
   const scenes = new SceneStore(db);
-  const stream = new StreamService(db, config, hub, installation, media);
+  const customEffects = new CustomEffectStore(db);
+  const stream = new StreamService(db, config, hub, installation, media, customEffects);
   const rundownStore = new RundownStore(db);
   const rundown = new RundownEngine(rundownStore, scenes, stream);
   const paint = new PaintService(db, config);
@@ -69,6 +72,7 @@ async function main(): Promise<void> {
   app.use('/api/dmx', dmxRoutes(dmx));
   app.use('/api/stream', streamRoutes(stream, scenes));
   app.use('/api/scenes', sceneRoutes(scenes));
+  app.use('/api/custom-effects', customEffectRoutes(customEffects, () => stream.onCustomEffectsChanged()));
   app.use('/api/rundown', rundownRoutes(rundownStore, rundown));
   app.use('/api/media', mediaRoutes(media, { ffmpeg: ffmpegAvailable, tmpDir: mediaTmpDir }));
   app.use(
@@ -91,6 +95,7 @@ async function main(): Promise<void> {
   }
 
   app.use(paintErrorHandler);
+  app.use(customEffectErrorHandler);
   app.use(errorHandler);
 
   const server = app.listen(config.port, config.host, () => {

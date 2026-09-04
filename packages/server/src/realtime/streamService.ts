@@ -18,6 +18,7 @@ import type { InstallationStore } from '../installation/store.js';
 import type { MediaStore } from '../media/mediaStore.js';
 import { postState } from '../wled/httpClient.js';
 import { sceneFrameProducer } from '../render/sceneProducer.js';
+import type { CustomEffectStore } from '../render/customEffectStore.js';
 import {
   DdpSender,
   solidFrameProducer,
@@ -124,6 +125,7 @@ export class StreamService {
     private readonly hub: RealtimeHub,
     private readonly installations: InstallationStore,
     private readonly media?: MediaStore,
+    private readonly customEffects?: CustomEffectStore,
   ) {
     this.repo = new DeviceRepo(db);
     this.settings = new SettingsStore(db);
@@ -144,7 +146,11 @@ export class StreamService {
     const targets = this.collectTargets();
     this.streamingIds = new Set(targets.map((t) => t.deviceId));
     this.sender.setTargets(targets);
-    if (this.scene) this.sender.setProducer(sceneFrameProducer(this.scene, this.installations.get(), this.media));
+    if (this.scene) {
+      this.sender.setProducer(
+        sceneFrameProducer(this.scene, this.installations.get(), this.media, this.customEffects?.toEffectDefMap()),
+      );
+    }
   }
 
   /**
@@ -152,6 +158,15 @@ export class StreamService {
    * the layout is saved so the wall follows the edit.
    */
   onInstallationChanged(): void {
+    if (this.mode === 'scene') this.refreshScene();
+  }
+
+  /**
+   * Rebuild the current scene producer after a custom effect is created,
+   * edited or deleted, so a Scene streaming live picks up the change
+   * immediately instead of waiting for an unrelated edit.
+   */
+  onCustomEffectsChanged(): void {
     if (this.mode === 'scene') this.refreshScene();
   }
 
@@ -446,18 +461,19 @@ export class StreamService {
     this.color = null;
     this.soloId = null;
     this.scene = scene;
-    const unknown = unknownEffectIds(scene);
+    const customEffectsMap = this.customEffects?.toEffectDefMap();
+    const unknown = unknownEffectIds(scene, customEffectsMap);
     if (unknown.length) log.warn(`stream: scene "${scene.name}" has unknown effects`, { unknown });
 
     if (this.mode === 'scene' && this.sender.running) {
-      this.sender.setProducer(sceneFrameProducer(scene, this.installations.get(), this.media));
+      this.sender.setProducer(sceneFrameProducer(scene, this.installations.get(), this.media, customEffectsMap));
       return this.status();
     }
 
     this.mode = 'scene';
     const targets = this.collectTargets();
     this.streamingIds = new Set(targets.map((t) => t.deviceId));
-    this.sender.start(targets, sceneFrameProducer(scene, this.installations.get(), this.media));
+    this.sender.start(targets, sceneFrameProducer(scene, this.installations.get(), this.media, customEffectsMap));
     log.info(`stream: scene "${scene.name}" (${scene.layers.length} layers) → ${targets.length} device(s)`);
     return this.status();
   }
@@ -490,7 +506,7 @@ export class StreamService {
         ? {
             name: this.scene.name,
             layerCount: this.scene.layers.length,
-            unknownEffects: unknownEffectIds(this.scene),
+            unknownEffects: unknownEffectIds(this.scene, this.customEffects?.toEffectDefMap()),
           }
         : null,
       paint: this.paint
