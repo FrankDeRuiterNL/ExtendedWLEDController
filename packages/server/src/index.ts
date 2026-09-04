@@ -24,6 +24,7 @@ import { StreamService } from './realtime/streamService.js';
 import { RundownStore } from './rundown/store.js';
 import { RundownEngine } from './rundown/engine.js';
 import { rundownRoutes } from './rundown/routes.js';
+import { systemRoutes } from './system/routes.js';
 import { log } from './logger.js';
 
 async function main(): Promise<void> {
@@ -34,8 +35,10 @@ async function main(): Promise<void> {
   const dmx = new DmxService(db, config);
   const service = new DeviceService(db, config, hub, dmx);
   const installation = new InstallationStore(db);
-  const floorplans = new FloorplanStore(join(config.dataDir, 'floorplan'));
-  const media = new MediaStore(join(config.dataDir, 'media'));
+  const floorplanDir = join(config.dataDir, 'floorplan');
+  const mediaDir = join(config.dataDir, 'media');
+  const floorplans = new FloorplanStore(floorplanDir);
+  const media = new MediaStore(mediaDir);
   // Scratch space for in-progress media uploads — on the data volume, not the
   // container's writable layer. Wiped on boot so a crash mid-upload can't leak.
   const mediaTmpDir = join(config.dataDir, 'tmp');
@@ -72,6 +75,10 @@ async function main(): Promise<void> {
     '/api/installation',
     installationRoutes(installation, floorplans, () => stream.onInstallationChanged()),
   );
+  app.use(
+    '/api/system',
+    systemRoutes({ db, config, mediaDir, floorplanDir, teardownServices: () => teardownServices() }),
+  );
 
   const webDir =
     config.webDir ?? (existsSync(join(process.cwd(), 'packages/web/dist')) ? join(process.cwd(), 'packages/web/dist') : null);
@@ -96,16 +103,22 @@ async function main(): Promise<void> {
   const browserHub = new BrowserHub(server, hub);
   await hub.sync(service.registrySnapshot());
 
-  let shuttingDown = false;
-  const shutdown = async (signal: string) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    log.info(`${signal} received, shutting down`);
+  // Stop everything that touches the DB or the wire. Shared by graceful
+  // shutdown and by a config restore (which then swaps the DB file and exits).
+  const teardownServices = async (): Promise<void> => {
     rundown.shutdown();
     await stream.stop().catch(() => undefined);
     stream.shutdown();
     browserHub.close();
     await hub.stop();
+  };
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info(`${signal} received, shutting down`);
+    await teardownServices();
     server.close(() => {
       db.close();
       process.exit(0);

@@ -180,6 +180,13 @@ export const migrations: Migration[] = [
   },
 ];
 
+/**
+ * The newest schema version this build knows how to run. A backup whose DB
+ * `user_version` is higher than this cannot be restored — migrations are
+ * forward-only, so an older binary can't step a newer schema back down.
+ */
+export const LATEST_DB_VERSION = migrations[migrations.length - 1]!.version;
+
 export function migrate(db: BetterSqlite3.Database): { from: number; to: number } {
   const from = db.pragma('user_version', { simple: true }) as number;
   const pending = migrations.filter((m) => m.version > from).sort((a, b) => a.version - b.version);

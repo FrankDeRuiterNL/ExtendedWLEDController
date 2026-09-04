@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -6,6 +6,12 @@ import {
   Card,
   CardContent,
   Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   MenuItem,
   Stack,
@@ -22,6 +28,8 @@ import {
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
+import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
+import RestoreIcon from '@mui/icons-material/Restore';
 import {
   useAssignDmx,
   useDmxPatch,
@@ -36,6 +44,7 @@ import {
   useStopStream,
   useStreamStatus,
 } from '../api/stage.js';
+import { downloadBackup, serverUptime, useRestoreBackup, waitForRestart } from '../api/system.js';
 import { md3 } from '../theme/tokens.js';
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -382,12 +391,154 @@ function StreamTestCard() {
   );
 }
 
+function MaintenanceCard() {
+  const restore = useRestoreBackup();
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [pending, setPending] = useState<File | null>(null);
+  const [phase, setPhase] = useState<'idle' | 'restarting' | 'timeout'>('idle');
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const pickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    e.target.value = ''; // let the same file be picked again after a cancel
+    if (file) {
+      setError(null);
+      setPending(file);
+    }
+  };
+
+  const doDownload = async () => {
+    setError(null);
+    setDownloading(true);
+    try {
+      await downloadBackup();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const doRestore = async () => {
+    if (!pending) return;
+    const file = pending;
+    setPending(null);
+    setError(null);
+    try {
+      const baseline = await serverUptime();
+      await restore.mutateAsync(file);
+      setPhase('restarting');
+      const back = await waitForRestart(baseline);
+      if (back) window.location.reload();
+      else setPhase('timeout');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent>
+        <Typography variant="h4" gutterBottom>
+          Backup &amp; Restore
+        </Typography>
+
+        {phase === 'restarting' ? (
+          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 1 }}>
+            <CircularProgress size={20} />
+            <Typography variant="body2" color="text.secondary">
+              Backup restored — the app is restarting. This page reloads automatically when it&apos;s back.
+            </Typography>
+          </Stack>
+        ) : phase === 'timeout' ? (
+          <Alert severity="warning">
+            The backup was restored, but the app is taking a while to restart. Reload this page in a
+            moment.
+          </Alert>
+        ) : (
+          <>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              A backup is a single <code>.zip</code> holding the whole database (devices, scenes,
+              rundown, layout, DDP settings) plus every uploaded image and the floorplan. Restoring
+              one replaces <b>all</b> current data and restarts the app.
+            </Typography>
+
+            {error && (
+              <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+                {error}
+              </Alert>
+            )}
+
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Button
+                variant="outlined"
+                startIcon={<CloudDownloadIcon />}
+                onClick={doDownload}
+                disabled={downloading || restore.isPending}
+              >
+                {downloading ? 'Preparing…' : 'Download backup'}
+              </Button>
+              <Button
+                variant="outlined"
+                color="error"
+                startIcon={<RestoreIcon />}
+                onClick={() => fileInput.current?.click()}
+                disabled={downloading || restore.isPending}
+              >
+                Restore from backup…
+              </Button>
+            </Stack>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".zip,application/zip"
+              hidden
+              onChange={pickFile}
+            />
+          </>
+        )}
+      </CardContent>
+
+      <Dialog open={pending != null} onClose={() => !restore.isPending && setPending(null)}>
+        <DialogTitle>Restore from backup?</DialogTitle>
+        <DialogContent>
+          <DialogContentText component="div">
+            <p>
+              <b>{pending?.name}</b>
+            </p>
+            <p>
+              This replaces <b>all current data</b> — every device, scene, rundown, the layout, DDP
+              settings and every uploaded image — with the contents of this backup. There is no undo,
+              and the app will restart.
+            </p>
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={restore.isPending} onClick={() => setPending(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            disabled={restore.isPending}
+            onClick={doRestore}
+          >
+            {restore.isPending ? 'Restoring…' : 'Overwrite everything'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Card>
+  );
+}
+
 export function StagePage() {
   return (
     <Stack spacing={3}>
       <Typography variant="h2">System</Typography>
       <DmxPatchCard />
       <StreamTestCard />
+      <MaintenanceCard />
     </Stack>
   );
 }

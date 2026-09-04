@@ -1,6 +1,6 @@
 {
   "name": "extended-wled-controller",
-  "version": "0.14.3",
+  "version": "0.15.0",
   "private": true,
   "description": "Self-hosted control surface and effects engine for multiple WLED instances",
   "author": "Frankvandetechniek.nl",

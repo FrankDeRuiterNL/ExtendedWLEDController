@@ -165,6 +165,11 @@ An ordered list of **cues** that plays scenes on the output as a show.
   fallback), a frame-rate cap, a **±1 pixel offset** to compensate an addressing
   shift, and a **Kelvin white-balance** correction for RGB-only strips (applied
   in the stream and mirrored in the preview).
+- **Backup & Restore.** Download the whole install as one `.zip` — a consistent
+  snapshot of the database (devices, scenes, rundown, layout, DDP settings) plus
+  every uploaded image and the floorplan. Restoring one is all-or-nothing: it
+  validates the archive (schema not newer than this build, DB passes an integrity
+  check), then replaces everything and restarts the app.
 
 ### Under the hood
 
@@ -375,3 +380,5 @@ WLED 16.0.0 (ESP32) and 16.0.1 (QuinLED Dig-Quad), including a genuine truncated
 | POST/GET | `/api/media` · `/api/media/:id` | media asset upload (image RGBA / video) + fetch |
 | GET/PUT | `/api/installation` | the fixture / canvas model |
 | GET/PUT/DELETE | `/api/installation/floorplan` | floorplan reference image |
+| GET | `/api/system/backup` | download the whole install as one `.zip` |
+| POST | `/api/system/restore` | upload a backup `.zip`, overwrite everything, restart |
