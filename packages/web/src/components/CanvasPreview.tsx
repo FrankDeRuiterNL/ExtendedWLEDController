@@ -464,6 +464,14 @@ export function CanvasPreview({
         }
       }
 
+      // Revisit the render resolution ~twice a second. The box-size track runs in
+      // every mode (output mode skips the sample loop, so its perf-driven branch
+      // never fires); the perf back-off / grow only makes sense once we've timed
+      // an actual sample loop this tick.
+      const adapt = ++adaptTick % 30 === 0;
+      const resTarget = Math.max(RES_MIN, Math.min(RES_MAX, boxTargetW()));
+      if (adapt && w > resTarget * 1.15) applyRes(resTarget);
+
       if (s.showOutputOnly) {
         // "As-output" view — black canvas, only the fixtures are lit. The scene
         // still streams; the fixture overlay below samples the real scene.
@@ -486,11 +494,9 @@ export function CanvasPreview({
 
         const dt = performance.now() - t0;
         sampleEma = sampleEma ? sampleEma * 0.8 + dt * 0.2 : dt;
-        if (++adaptTick % 30 === 0) {
-          const target = Math.max(RES_MIN, Math.min(RES_MAX, boxTargetW()));
-          if (w > target * 1.15) applyRes(target);
-          else if (sampleEma > 24 && w > RES_MIN) applyRes(w * 0.85);
-          else if (sampleEma < 12 && w < target) applyRes(Math.min(w * 1.15, target));
+        if (adapt) {
+          if (sampleEma > 24 && w > RES_MIN) applyRes(w * 0.85);
+          else if (sampleEma < 12 && w < resTarget) applyRes(Math.min(w * 1.15, resTarget));
         }
       }
 
