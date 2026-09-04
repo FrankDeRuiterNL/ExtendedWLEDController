@@ -24,6 +24,7 @@ import { HardwarePage } from './pages/HardwarePage.js';
 import { StudioPage } from './pages/StudioPage.js';
 import { RundownPage } from './pages/RundownPage.js';
 import { PaintPage } from './pages/PaintPage.js';
+import { EffectsPage } from './pages/EffectsPage.js';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false } },
@@ -40,6 +41,7 @@ const router = createBrowserRouter([
       { path: 'layout', element: <LayoutPage /> },
       { path: 'hardware', element: <HardwarePage /> },
       { path: 'studio', element: <StudioPage /> },
+      { path: 'effects', element: <EffectsPage /> },
       { path: 'rundown', element: <RundownPage /> },
       { path: 'paint', element: <PaintPage /> },
       { path: 'stage', element: <StagePage /> },

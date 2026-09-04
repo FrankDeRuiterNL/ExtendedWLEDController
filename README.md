@@ -119,6 +119,16 @@ non-square canvas doesn't shear.
   (a Rundown cue).
 - Scenes save to SQLite.
 
+### Effects
+
+A gallery of every built-in effect with a live-animated thumbnail, and a larger
+preview against your real fixture layout (the same preview and per-effect
+parameter controls Scenes uses) with the params live-editable so you can dial
+one in before using it in a Scene. Preview-only — it never touches the wire;
+stream one by adding an FX layer on the Scenes page. Custom effects (build your
+own from a stack of primitives, or duplicate a built-in to retune its
+parameters) are planned for a later update.
+
 ### Rundown
 
 An ordered list of **cues** that plays scenes on the output as a show.

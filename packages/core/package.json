@@ -1,6 +1,6 @@
 {
   "name": "@ewc/core",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "private": true,
   "type": "module",
   "description": "Shared, runtime-agnostic WLED domain logic. No node: imports — must import cleanly into the browser.",
