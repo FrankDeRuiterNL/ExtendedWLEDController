@@ -534,57 +534,6 @@ export function PaintPage() {
         <Card>
           <CardContent>
             <Typography variant="h5" gutterBottom>
-              Bake to device
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Write the canvas to the device as a one-frame GIF and play it with the Image effect —
-              runs on the device with no stream. Add a preset slot to also save it as a preset that
-              survives a reboot. The GIF filename is reused (overwritten) per bake.
-            </Typography>
-            {bakeBlockedReason ? (
-              <Alert severity="info">{bakeBlockedReason}</Alert>
-            ) : (
-              <>
-                <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap alignItems="center">
-                  <TextField
-                    size="small"
-                    label="Preset slot (optional)"
-                    type="number"
-                    value={bakePreset}
-                    onChange={(e) => setBakePreset(e.target.value)}
-                    slotProps={{ htmlInput: { min: 1, max: 250 } }}
-                    sx={{ width: 180 }}
-                  />
-                  <Button
-                    variant="contained"
-                    onClick={bakeCanvas}
-                    disabled={bake.isPending || litCount === 0}
-                  >
-                    Bake canvas
-                  </Button>
-                </Stack>
-                {bake.isError && (
-                  <Alert severity="error" sx={{ mt: 2 }}>
-                    {(bake.error as Error).message}
-                  </Alert>
-                )}
-                {bake.isSuccess && !bake.isPending && (
-                  <Alert severity="success" sx={{ mt: 2 }}>
-                    Baked <code>{bake.data.filename}</code> ({bake.data.bytes} B)
-                    {bake.data.preset != null ? `, saved as preset ${bake.data.preset}` : ''}
-                    {bake.data.freeKbAfter != null ? ` · ${bake.data.freeKbAfter} KB free` : ''}.
-                  </Alert>
-                )}
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {ledCount > 0 && (
-        <Card>
-          <CardContent>
-            <Typography variant="h5" gutterBottom>
               Pixel Scenes
             </Typography>
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap alignItems="center">
@@ -668,6 +617,57 @@ export function PaintPage() {
                   </Stack>
                 ))}
               </Stack>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {ledCount > 0 && (
+        <Card>
+          <CardContent>
+            <Typography variant="h5" gutterBottom>
+              Bake to device
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Write the canvas to the device as a one-frame GIF and play it with the Image effect —
+              runs on the device with no stream. Add a preset slot to also save it as a preset that
+              survives a reboot. The GIF filename is reused (overwritten) per bake.
+            </Typography>
+            {bakeBlockedReason ? (
+              <Alert severity="info">{bakeBlockedReason}</Alert>
+            ) : (
+              <>
+                <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap alignItems="center">
+                  <TextField
+                    size="small"
+                    label="Preset slot (optional)"
+                    type="number"
+                    value={bakePreset}
+                    onChange={(e) => setBakePreset(e.target.value)}
+                    slotProps={{ htmlInput: { min: 1, max: 250 } }}
+                    sx={{ width: 180 }}
+                  />
+                  <Button
+                    variant="contained"
+                    onClick={bakeCanvas}
+                    disabled={bake.isPending || litCount === 0}
+                  >
+                    Bake canvas
+                  </Button>
+                </Stack>
+                {bake.isError && (
+                  <Alert severity="error" sx={{ mt: 2 }}>
+                    {(bake.error as Error).message}
+                  </Alert>
+                )}
+                {bake.isSuccess && !bake.isPending && (
+                  <Alert severity="success" sx={{ mt: 2 }}>
+                    Baked <code>{bake.data.filename}</code> ({bake.data.bytes} B)
+                    {bake.data.preset != null ? `, saved as preset ${bake.data.preset}` : ''}
+                    {bake.data.freeKbAfter != null ? ` · ${bake.data.freeKbAfter} KB free` : ''}.
+                  </Alert>
+                )}
+              </>
             )}
           </CardContent>
         </Card>

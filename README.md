@@ -36,7 +36,8 @@ per-device WebSocket, DDP/DNRGB over UDP) goes through the backend.
 - **Connection status** (`connecting` / `live` / `polling` / `offline`) on every
   device, a **Live** indicator for the browser channel, and a `Wi-Fi <signal>` /
   `Ethernet <speed> Mbps` pill (Ethernet speed is a per-device setting — WLED
-  doesn't report it).
+  doesn't report it). An icon next to the pills opens the device's own WLED web
+  UI in a new tab.
 - **Refresh** re-reads the full snapshot, including the LED count, so assigning
   more LEDs in WLED updates the count here too.
 - **Node import** — read `/json/nodes` and add the peers you pick.

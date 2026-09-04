@@ -8,12 +8,14 @@ import {
   CardContent,
   Chip,
   CircularProgress,
+  IconButton,
   Stack,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import BoltIcon from '@mui/icons-material/Bolt';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate } from 'react-router-dom';
 import type { DeviceSummaryDTO } from '@ewc/core';
 import { useDevices } from '../api/devices.js';
@@ -35,6 +37,12 @@ function linkLabel(device: DeviceSummaryDTO): string {
   return `Wi-Fi ${fmtSignal(device.health?.wifiSignal ?? null)}`;
 }
 
+/** The device's own WLED web UI, landing on its Colors tab. */
+function webUiUrl(device: DeviceSummaryDTO): string {
+  const port = device.port !== 80 ? `:${device.port}` : '';
+  return `http://${device.host}${port}/#Colors`;
+}
+
 function DeviceCard({ device }: { device: DeviceSummaryDTO }) {
   const navigate = useNavigate();
   const h = device.health;
@@ -42,8 +50,8 @@ function DeviceCard({ device }: { device: DeviceSummaryDTO }) {
 
   return (
     <Card>
-      <CardActionArea onClick={() => navigate(`/devices/${device.id}`)} sx={{ height: '100%' }}>
-        <CardContent>
+      <CardActionArea onClick={() => navigate(`/devices/${device.id}`)}>
+        <CardContent sx={{ pb: 0 }}>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
             <StatusDot connection={device.connection} />
             <Typography variant="h5" noWrap sx={{ flex: 1 }}>
@@ -52,40 +60,57 @@ function DeviceCard({ device }: { device: DeviceSummaryDTO }) {
             {!device.enabled && <Chip size="small" label="disabled" variant="outlined" />}
           </Stack>
 
-          <Typography variant="body2" color="text.secondary" gutterBottom>
+          <Typography variant="body2" color="text.secondary">
             {device.host}
             {device.port !== 80 ? `:${device.port}` : ''} · {device.arch ?? '—'} · fw {device.fwVersion ?? '—'}
           </Typography>
-
-          <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mt: 1.5 }}>
-            <Chip
-              size="small"
-              variant="outlined"
-              label={`${device.ledCount ?? '—'} LED${device.ledCount === 1 ? '' : 's'}`}
-            />
-            {device.matrix && (
-              <Chip size="small" variant="outlined" label={`${device.matrix.w}×${device.matrix.h}`} />
-            )}
-            <Chip
-              size="small"
-              variant="outlined"
-              icon={<BoltIcon sx={{ fontSize: 16 }} />}
-              label={`${h?.fps ?? '—'} FPS`}
-            />
-            <Chip size="small" variant="outlined" label={linkLabel(device)} />
-            {h?.live && <Chip size="small" color="info" label="live" />}
-          </Stack>
-
-          {warnings.length > 0 && (
-            <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mt: 1.5, color: md3.warning }}>
-              <WarningAmberIcon sx={{ fontSize: 18 }} />
-              <Typography variant="caption">
-                {warnings.length === 1 ? warnings[0]!.message : `${warnings.length} warnings — open to review`}
-              </Typography>
-            </Stack>
-          )}
         </CardContent>
       </CardActionArea>
+
+      {/* Outside the CardActionArea (a <button>) so the WLED-UI link below is a
+          valid, independently clickable <a> rather than nested interactive
+          content. */}
+      <CardContent sx={{ pt: 1.5 }}>
+        <Stack direction="row" flexWrap="wrap" gap={1} alignItems="center">
+          <Chip
+            size="small"
+            variant="outlined"
+            label={`${device.ledCount ?? '—'} LED${device.ledCount === 1 ? '' : 's'}`}
+          />
+          {device.matrix && (
+            <Chip size="small" variant="outlined" label={`${device.matrix.w}×${device.matrix.h}`} />
+          )}
+          <Chip
+            size="small"
+            variant="outlined"
+            icon={<BoltIcon sx={{ fontSize: 16 }} />}
+            label={`${h?.fps ?? '—'} FPS`}
+          />
+          <Chip size="small" variant="outlined" label={linkLabel(device)} />
+          {h?.live && <Chip size="small" color="info" label="live" />}
+          <IconButton
+            size="small"
+            component="a"
+            href={webUiUrl(device)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open ${device.name}'s WLED web interface`}
+            title="Open this device's own WLED web interface"
+            sx={{ p: 0.5 }}
+          >
+            <OpenInNewIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Stack>
+
+        {warnings.length > 0 && (
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mt: 1.5, color: md3.warning }}>
+            <WarningAmberIcon sx={{ fontSize: 18 }} />
+            <Typography variant="caption">
+              {warnings.length === 1 ? warnings[0]!.message : `${warnings.length} warnings — open to review`}
+            </Typography>
+          </Stack>
+        )}
+      </CardContent>
     </Card>
   );
 }

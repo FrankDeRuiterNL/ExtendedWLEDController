@@ -114,7 +114,7 @@ function DmxPatchCard() {
             <TableRow>
               <TableCell>Device</TableCell>
               <TableCell align="right">LEDs</TableCell>
-              <TableCell align="right">Start univ.</TableCell>
+              <TableCell align="right">Universe</TableCell>
               <TableCell align="right">Start addr</TableCell>
               <TableCell align="center">Managed</TableCell>
               <TableCell align="center">State</TableCell>
