@@ -218,6 +218,48 @@ describe('sampleScene', () => {
     expect(sampleScene(s, 0.5, 0.5, 0)).toEqual([128, 0, 128]); // box centre
   });
 
+  it('rot rotates the box about its centre (square canvas)', () => {
+    const s: Scene = {
+      name: 't', background: [5, 6, 7],
+      layers: [{
+        ...makeLayer('a', 'solid'),
+        params: { color: [200, 100, 0] },
+        // a wide, short box across the middle, turned 90° → now tall and narrow
+        rect: { x: 0.2, y: 0.4, w: 0.6, h: 0.2, rot: 90 },
+      }],
+    };
+    // aspect 1 (square canvas). The rotated box spans x∈[0.4,0.6], y∈[0.2,0.8].
+    expect(sampleScene(s, 0.5, 0.25, 0, undefined, 1)).toEqual([200, 100, 0]); // above centre, inside
+    expect(sampleScene(s, 0.5, 0.75, 0, undefined, 1)).toEqual([200, 100, 0]); // below centre, inside
+    // a point to the side that was inside before is now outside → background
+    expect(sampleScene(s, 0.75, 0.5, 0, undefined, 1)).toEqual([5, 6, 7]);
+  });
+
+  it('rot 180 flips a gradient within its box', () => {
+    const params = { from: [255, 0, 0], to: [0, 0, 255], angle: 0, mirror: false };
+    const s: Scene = {
+      name: 't', background: [0, 0, 0],
+      layers: [{ ...makeLayer('a', 'gradient'), params, rect: { x: 0.25, y: 0, w: 0.5, h: 1, rot: 180 } }],
+    };
+    expect(sampleScene(s, 0.25, 0.5, 0, undefined, 1)).toEqual([0, 0, 255]); // left edge now "to"
+    expect(sampleScene(s, 0.75, 0.5, 0, undefined, 1)).toEqual([255, 0, 0]); // right edge now "from"
+  });
+
+  it('rot is aspect-corrected — a 90° box on a 2:1 canvas is not sheared', () => {
+    const s: Scene = {
+      name: 't', background: [0, 0, 0],
+      layers: [{
+        ...makeLayer('a', 'solid'),
+        params: { color: [10, 20, 30] },
+        rect: { x: 0.3, y: 0.3, w: 0.4, h: 0.4, rot: 90 }, // square box, centre (0.5,0.5)
+      }],
+    };
+    // On a 2:1 canvas the box is physically 0.4*W wide × 0.4*H tall = 0.8H × 0.4H.
+    // Rotated 90° it spans 0.4H wide × 0.8H tall → in normalised x that's 0.2, in y 0.4.
+    expect(sampleScene(s, 0.5, 0.75, 0, undefined, 2)).toEqual([10, 20, 30]); // inside, near top
+    expect(sampleScene(s, 0.65, 0.5, 0, undefined, 2)).toEqual([0, 0, 0]); // outside horizontally
+  });
+
   it('non-overlapping boxes run independently; overlapping boxes blend', () => {
     const s: Scene = {
       name: 't', background: [0, 0, 0],

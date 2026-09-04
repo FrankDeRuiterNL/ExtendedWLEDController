@@ -102,3 +102,35 @@ describe('SceneStore — text layer persistence', () => {
     db.close();
   });
 });
+
+describe('SceneStore — layer rect rotation', () => {
+  it('round-trips rect.rot and rejects an out-of-range angle', () => {
+    const db = openDb(':memory:');
+    const store = new SceneStore(db);
+
+    const scene: Scene = {
+      name: 'r',
+      background: [0, 0, 0],
+      layers: [
+        {
+          id: 'a',
+          effectId: 'solid',
+          params: { color: [1, 2, 3] },
+          blend: 'normal',
+          opacity: 1,
+          enabled: true,
+          rect: { x: 0.1, y: 0.1, w: 0.5, h: 0.3, rot: -37 },
+          mask: null,
+        },
+      ],
+    };
+    const created = store.create('r', scene);
+    expect(store.get(created.id)!.scene.layers[0]!.rect!.rot).toBe(-37);
+
+    const bad = structuredClone(scene);
+    bad.layers[0]!.rect!.rot = 720;
+    expect(() => store.create('bad', bad)).toThrow();
+
+    db.close();
+  });
+});

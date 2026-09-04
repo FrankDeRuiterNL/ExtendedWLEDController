@@ -245,15 +245,50 @@ export function textRasterStale(s: TextLayerSpec): boolean {
  * outside for an overhang). The effect renders **scaled to fill this box** — a
  * point outside contributes nothing, so layers on different parts of the canvas
  * run independently and only blend where their boxes overlap.
+ *
+ * `rot` rotates the box (and everything drawn in it) about its own centre,
+ * clockwise, in degrees. The rotation is applied in *display* space — pass the
+ * canvas aspect ratio to {@link sampleScene} so a rotated box on a non-square
+ * canvas doesn't shear.
  */
 export interface LayerRect {
   x: number;
   y: number;
   w: number;
   h: number;
+  /** Clockwise rotation about the box centre, degrees. Absent = 0. */
+  rot?: number;
 }
 
 export const FULL_RECT: LayerRect = { x: 0, y: 0, w: 1, h: 1 };
+
+/**
+ * Map a canvas point (x,y ∈ [0,1], y down) into a layer's local unit space,
+ * undoing the box's rotation about its centre. `aspect` is canvas width ÷
+ * height, so the rotation is a rigid motion in display space. Returns local
+ * coords where [0,1]×[0,1] is inside the box.
+ */
+export function rectLocalPoint(
+  r: LayerRect,
+  x: number,
+  y: number,
+  aspect: number,
+): { lx: number; ly: number } {
+  const rot = r.rot ?? 0;
+  if (!rot) return { lx: (x - r.x) / r.w, ly: (y - r.y) / r.h };
+
+  const cx = r.x + r.w / 2;
+  const cy = r.y + r.h / 2;
+  const rad = (rot * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  // Aspect-correct the delta, rotate by -rot, uncorrect.
+  const dx = (x - cx) * aspect;
+  const dy = y - cy;
+  const rx = (dx * cos + dy * sin) / aspect;
+  const ry = -dx * sin + dy * cos;
+  return { lx: (cx + rx - r.x) / r.w, ly: (cy + ry - r.y) / r.h };
+}
 
 export interface Layer {
   /** Stable within a scene; used as the React key and for reordering. */
@@ -315,6 +350,8 @@ export function sampleScene(
   y: number,
   t: number,
   mediaFrames?: MediaFrames,
+  /** Canvas width ÷ height — only needed so a rotated layer box doesn't shear. */
+  aspect = 1,
 ): RGB {
   let dst: RGB = [
     clamp8(scene.background[0]),
@@ -335,8 +372,7 @@ export function sampleScene(
     let ly = y;
     if (r) {
       if (r.w <= 0 || r.h <= 0) continue;
-      lx = (x - r.x) / r.w;
-      ly = (y - r.y) / r.h;
+      ({ lx, ly } = rectLocalPoint(r, x, y, aspect));
       if (lx < 0 || lx > 1 || ly < 0 || ly > 1) continue;
     }
 

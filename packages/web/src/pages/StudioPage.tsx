@@ -100,16 +100,24 @@ function reviveDraftTransport(scene: Scene): Scene {
 }
 
 const pct = (n: number) => Math.round(n * 100);
-const isFullRect = (r: LayerRect) => r.x <= 0 && r.y <= 0 && r.w >= 1 && r.h >= 1;
+const isFullRect = (r: LayerRect) => r.x <= 0 && r.y <= 0 && r.w >= 1 && r.h >= 1 && !r.rot;
+
+/** Fold degrees into (-180, 180]. */
+const normDeg = (n: number) => {
+  const m = ((n % 360) + 360) % 360;
+  return m > 180 ? m - 360 : m;
+};
 
 function RectField({
   label,
   value,
   onCommit,
+  unit = '%',
 }: {
   label: string;
-  value: number; // percent
-  onCommit: (pctValue: number) => void;
+  value: number;
+  onCommit: (value: number) => void;
+  unit?: string;
 }) {
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);
@@ -130,14 +138,14 @@ function RectField({
       onChange={(e) => setText(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-      InputProps={{ endAdornment: <Typography variant="caption" color="text.secondary">%</Typography> }}
+      InputProps={{ endAdornment: <Typography variant="caption" color="text.secondary">{unit}</Typography> }}
       sx={{ flex: 1 }}
     />
   );
 }
 
 function RegionEditor({ rect, onChange }: { rect: LayerRect; onChange: (r: LayerRect) => void }) {
-  const field = (key: keyof LayerRect, label: string) => (
+  const field = (key: 'x' | 'y' | 'w' | 'h', label: string) => (
     <RectField
       label={label}
       value={pct(rect[key])}
@@ -154,6 +162,17 @@ function RegionEditor({ rect, onChange }: { rect: LayerRect; onChange: (r: Layer
         {field('w', 'Width')}
         {field('h', 'Height')}
       </Stack>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <RectField
+          label="Rotation"
+          value={Math.round(rect.rot ?? 0)}
+          onCommit={(v) => onChange({ ...rect, rot: normDeg(v) || undefined })}
+          unit="°"
+        />
+        <Button size="small" disabled={!rect.rot} onClick={() => onChange({ ...rect, rot: undefined })}>
+          0°
+        </Button>
+      </Stack>
       <Button
         size="small"
         disabled={isFullRect(rect)}
@@ -163,7 +182,7 @@ function RegionEditor({ rect, onChange }: { rect: LayerRect; onChange: (r: Layer
       </Button>
       <Typography variant="caption" color="text.secondary">
         The effect fills this box; LEDs outside it fall through to the layers below. Drag the box on
-        the preview to move it, corners to resize.
+        the preview to move it, corners to resize, the top handle to rotate (hold Shift to snap 15°).
       </Typography>
     </Stack>
   );

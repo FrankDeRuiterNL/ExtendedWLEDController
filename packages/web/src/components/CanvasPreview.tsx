@@ -44,15 +44,52 @@ type Corner = 'nw' | 'ne' | 'sw' | 'se';
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
+/** Fold a degree value into (-180, 180] so the numeric field stays readable. */
+const normDeg = (n: number) => {
+  const m = ((n % 360) + 360) % 360;
+  return m > 180 ? m - 360 : m;
+};
+
+/**
+ * Resize a layer box from a corner drag. `dx`/`dy` are the pointer delta in
+ * normalised canvas units. `canvasAspect` is width ÷ height; `lockRatio`, when
+ * set, forces `w/h` (media layers keep their native aspect).
+ *
+ * When the box is **rotated**, the drag delta is rotated into the box's own
+ * axes and the box grows symmetrically about its centre — resizing a rotated
+ * box while keeping one corner pinned in screen space is a lot of fiddly math
+ * for little gain here.
+ */
 function resizeRect(
   r: LayerRect,
   corner: Corner,
   dx: number,
   dy: number,
-  aspect?: number,
+  canvasAspect: number,
+  lockRatio?: number,
 ): LayerRect {
-  let { x, y, w, h } = r;
   const MIN = 0.03;
+  const rot = r.rot ?? 0;
+
+  if (rot) {
+    const rad = (rot * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    // Pointer delta → box-local axes (inverse rotation, aspect-corrected).
+    const ax = dx * canvasAspect;
+    const lx = (ax * cos + dy * sin) / canvasAspect;
+    const ly = -ax * sin + dy * cos;
+    const sx = corner[1] === 'e' ? 1 : -1;
+    const sy = corner[0] === 's' ? 1 : -1;
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2;
+    let w = clamp(r.w + 2 * sx * lx, MIN, 3);
+    let h = clamp(r.h + 2 * sy * ly, MIN, 3);
+    if (lockRatio && lockRatio > 0) h = w / lockRatio;
+    return { x: cx - w / 2, y: cy - h / 2, w, h, rot };
+  }
+
+  let { x, y, w, h } = r;
   if (corner === 'nw' || corner === 'sw') {
     const nx = clamp(x + dx, -0.5, x + w - MIN);
     w += x - nx;
@@ -68,8 +105,8 @@ function resizeRect(
 
   // Aspect lock (media layers): drive height from width, keeping the corner
   // opposite the drag anchored.
-  if (aspect && aspect > 0) {
-    const nh = w / aspect;
+  if (lockRatio && lockRatio > 0) {
+    const nh = w / lockRatio;
     if (corner === 'nw' || corner === 'ne') y += h - nh; // bottom edge stays put
     h = nh;
   }
@@ -101,6 +138,8 @@ function drawFixtures(
   octx.lineCap = 'round';
   octx.lineJoin = 'round';
   const coreW = (outputMode ? 3.2 : 2) * dpr;
+  const aspect =
+    installation.canvas.height > 0 ? installation.canvas.width / installation.canvas.height : 1;
 
   const trace = (px: ReadonlyArray<readonly [number, number]>) => {
     octx.beginPath();
@@ -116,7 +155,7 @@ function drawFixtures(
     const px = pts.map((p) => [p.x * cw, p.y * ch] as const);
     const g = deviceGains?.[f.deviceId];
     const cols = pts.map((p) => {
-      const c = sampleScene(scene, p.x, p.y, t, mediaFrames);
+      const c = sampleScene(scene, p.x, p.y, t, mediaFrames, aspect);
       return g
         ? `rgb(${clamp255(c[0] * g[0])},${clamp255(c[1] * g[1])},${clamp255(c[2] * g[2])})`
         : `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
@@ -318,7 +357,15 @@ export function CanvasPreview({
     mediaImages,
   };
   const drag = useRef<
-    | { id: string; mode: 'move' | Corner; startRect: LayerRect; px: number; py: number }
+    | {
+        id: string;
+        mode: 'move' | 'rotate' | Corner;
+        startRect: LayerRect;
+        px: number;
+        py: number;
+        /** Pointer angle (rad) at drag start, relative to the box centre — rotate mode only. */
+        startAngle?: number;
+      }
     | null
   >(null);
 
@@ -482,7 +529,7 @@ export function CanvasPreview({
         const data = img.data;
         for (let py = 0; py < h; py++) {
           for (let px = 0; px < w; px++) {
-            const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t, mediaFrames);
+            const c = sampleScene(s.scene, (px + 0.5) / w, (py + 0.5) / h, t, mediaFrames, aspect);
             const o = (py * w + px) * 4;
             data[o] = c[0];
             data[o + 1] = c[1];
@@ -530,16 +577,30 @@ export function CanvasPreview({
     };
   }, [aspect]);
 
+  const boxCentreScreen = (r: LayerRect) => {
+    const box = overlayRef.current!.getBoundingClientRect();
+    return {
+      x: box.left + (r.x + r.w / 2) * box.width,
+      y: box.top + (r.y + r.h / 2) * box.height,
+    };
+  };
+
   const onPointerDown = (
     e: React.PointerEvent,
     id: string,
-    mode: 'move' | Corner,
+    mode: 'move' | 'rotate' | Corner,
     rect: LayerRect,
   ) => {
     e.stopPropagation();
     (e.target as Element).setPointerCapture(e.pointerId);
     onSelectLayer?.(id);
-    drag.current = { id, mode, startRect: rect, px: e.clientX, py: e.clientY };
+    const base = { id, mode, startRect: rect, px: e.clientX, py: e.clientY };
+    if (mode === 'rotate' && overlayRef.current) {
+      const c = boxCentreScreen(rect);
+      drag.current = { ...base, startAngle: Math.atan2(e.clientY - c.y, e.clientX - c.x) };
+    } else {
+      drag.current = base;
+    }
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -555,8 +616,14 @@ export function CanvasPreview({
         x: clamp(d.startRect.x + dx, -0.5, 1.5 - d.startRect.w),
         y: clamp(d.startRect.y + dy, -0.5, 1.5 - d.startRect.h),
       });
+    } else if (d.mode === 'rotate') {
+      const c = boxCentreScreen(d.startRect);
+      const now = Math.atan2(e.clientY - c.y, e.clientX - c.x);
+      let deg = (d.startRect.rot ?? 0) + ((now - (d.startAngle ?? now)) * 180) / Math.PI;
+      if (e.shiftKey) deg = Math.round(deg / 15) * 15;
+      onLayerRect(d.id, { ...d.startRect, rot: normDeg(deg) });
     } else {
-      onLayerRect(d.id, resizeRect(d.startRect, d.mode, dx, dy, mediaAspect(d.id)));
+      onLayerRect(d.id, resizeRect(d.startRect, d.mode, dx, dy, aspect, mediaAspect(d.id)));
     }
   };
 
@@ -682,7 +749,7 @@ export function CanvasPreview({
             if (!l.enabled) return null;
             const r = l.rect ?? FULL_RECT;
             const sel = l.id === selectedLayerId;
-            const isFull = r.x <= 0 && r.y <= 0 && r.w >= 1 && r.h >= 1;
+            const isFull = r.x <= 0 && r.y <= 0 && r.w >= 1 && r.h >= 1 && !r.rot;
             if (isFull && !sel) return null; // don't clutter with full-canvas outlines
             return (
               <Box
@@ -694,31 +761,63 @@ export function CanvasPreview({
                   top: `${r.y * 100}%`,
                   width: `${r.w * 100}%`,
                   height: `${r.h * 100}%`,
+                  transform: r.rot ? `rotate(${r.rot}deg)` : undefined,
+                  transformOrigin: 'center',
                   border: `1.5px ${sel ? 'solid' : 'dashed'} ${sel ? md3.primary : 'rgba(255,255,255,0.5)'}`,
                   boxShadow: sel ? `0 0 0 1px rgba(0,0,0,0.6)` : 'none',
                   cursor: sel ? 'move' : 'pointer',
                 }}
               >
-                {sel &&
-                  (['nw', 'ne', 'sw', 'se'] as Corner[]).map((c) => (
+                {sel && (
+                  <>
+                    {(['nw', 'ne', 'sw', 'se'] as Corner[]).map((c) => (
+                      <Box
+                        key={c}
+                        onPointerDown={(e) => onPointerDown(e, l.id, c, r)}
+                        sx={{
+                          position: 'absolute',
+                          width: 12,
+                          height: 12,
+                          bgcolor: md3.primary,
+                          border: '1px solid #000',
+                          borderRadius: '2px',
+                          top: c[0] === 'n' ? -6 : undefined,
+                          bottom: c[0] === 's' ? -6 : undefined,
+                          left: c[1] === 'w' ? -6 : undefined,
+                          right: c[1] === 'e' ? -6 : undefined,
+                          cursor: `${c}-resize`,
+                        }}
+                      />
+                    ))}
+                    {/* rotate handle — a stalk above the top edge */}
                     <Box
-                      key={c}
-                      onPointerDown={(e) => onPointerDown(e, l.id, c, r)}
                       sx={{
                         position: 'absolute',
-                        width: 12,
-                        height: 12,
+                        left: '50%',
+                        top: -22,
+                        width: 1,
+                        height: 16,
                         bgcolor: md3.primary,
-                        border: '1px solid #000',
-                        borderRadius: '2px',
-                        top: c[0] === 'n' ? -6 : undefined,
-                        bottom: c[0] === 's' ? -6 : undefined,
-                        left: c[1] === 'w' ? -6 : undefined,
-                        right: c[1] === 'e' ? -6 : undefined,
-                        cursor: `${c}-resize`,
+                        pointerEvents: 'none',
                       }}
                     />
-                  ))}
+                    <Box
+                      onPointerDown={(e) => onPointerDown(e, l.id, 'rotate', r)}
+                      sx={{
+                        position: 'absolute',
+                        left: '50%',
+                        top: -22,
+                        width: 12,
+                        height: 12,
+                        transform: 'translate(-50%, -50%)',
+                        bgcolor: md3.primary,
+                        border: '1px solid #000',
+                        borderRadius: '50%',
+                        cursor: 'grab',
+                      }}
+                    />
+                  </>
+                )}
               </Box>
             );
           })}

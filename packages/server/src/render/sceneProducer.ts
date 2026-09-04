@@ -169,6 +169,8 @@ export function sceneFrameProducer(
     list.push(led);
   }
 
+  const aspect =
+    installation.canvas.height > 0 ? installation.canvas.width / installation.canvas.height : 1;
   const provider = buildMediaProvider(scene, media);
 
   return (target, tMs) => {
@@ -182,7 +184,7 @@ export function sceneFrameProducer(
     for (const led of leds) {
       const o = led.index * bpl;
       if (o < 0 || o + bpl > buf.length) continue;
-      const c = sampleScene(scene, led.x, led.y, t, mediaFrames);
+      const c = sampleScene(scene, led.x, led.y, t, mediaFrames, aspect);
       buf[o] = c[0];
       buf[o + 1] = c[1];
       buf[o + 2] = c[2];

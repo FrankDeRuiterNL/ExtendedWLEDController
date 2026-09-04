@@ -13,6 +13,7 @@ const rect = z.object({
   y: z.number().min(-1).max(2),
   w: z.number().min(0).max(3),
   h: z.number().min(0).max(3),
+  rot: z.number().min(-360).max(360).optional(),
 });
 
 const media = z.object({

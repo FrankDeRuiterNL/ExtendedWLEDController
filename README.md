@@ -85,8 +85,11 @@ so power is always computed for the whole output.
 
 A scene is an ordered **layer stack** composited over a background. Every layer
 has a blend mode (normal / add / screen / multiply / lighten), an opacity, and a
-**canvas region** (position + size — the layer renders scaled to that box; LEDs
-outside it fall through to the layers below, overlapping boxes blend).
+**canvas region** (position, size and rotation — the layer renders scaled to that
+box; LEDs outside it fall through to the layers below, overlapping boxes blend).
+Drag the box to move it, the corners to resize, the top handle to rotate (hold
+Shift to snap to 15°); the rotation is aspect-corrected so a turned box on a
+non-square canvas doesn't shear.
 
 - **FX layers** — one of 10 pure-function effects (Solid, Gradient, Rainbow,
   Plasma, Fire, Wipe, Chase, Comet, Scanner, Sparkle), with per-effect parameters
