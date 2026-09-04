@@ -522,7 +522,11 @@ function TextLayerInspector({
               naturalHeight: r.naturalHeight,
               renderHash: r.renderHash,
             },
-            rect: fitMediaRect(r.naturalWidth, r.naturalHeight, canvas),
+            // Only fit the box on the very first raster (no asset yet). After
+            // that the user owns the box — editing the text or colour must not
+            // yank it back to a centred default. "Reset box to text aspect"
+            // re-fits on demand.
+            ...(spec.assetId ? {} : { rect: fitMediaRect(r.naturalWidth, r.naturalHeight, canvas) }),
           });
         })
         .catch((e) => {
