@@ -138,20 +138,26 @@ An ordered list of **cues** that plays scenes on the output as a show.
 
 ### Paint
 
-- Paint a device / segment's LEDs on a **per-LED grid** (brush, erase,
-  eyedropper, fill, fill-black, brightness). Touching the canvas starts a **live
-  one-device DDP stream from the painter**; every edit hot-swaps the frame with
-  no restart or re-blank, so the strip tracks the canvas in real time.
+- Paint **per fixture** (from the Layout) on a **per-LED grid** (brush, erase,
+  eyedropper, fill, fill-black, brightness). A **matrix** fixture paints as a 2-D
+  grid in its real wiring order (first LED / serpentine / orientation from
+  Layout); strips and shapes paint as a wire-order row. Touching the canvas
+  starts a **live DDP stream from the painter** to the fixture's device at its
+  wire offset; every edit hot-swaps the frame with no restart or re-blank, so the
+  strip tracks the canvas in real time. Painting a fixture takes over its whole
+  device, so any sibling fixtures on it go dark until you Stop & Release (called
+  out in the UI).
 - **Stop & Release** ends the stream and the device returns to its effect.
-  Switching device, or painting while a scene is streaming, releases the previous
+  Switching fixture, or painting while a scene is streaming, releases the previous
   target first (the scene case asks to confirm).
 - **Pixel Scenes** — save the canvas (per-LED colour + brightness + the width it
-  was painted for) to SQLite and reload it onto whichever device / segment is
-  selected.
+  was painted for) to SQLite and reload it onto whichever fixture is selected
+  (mapped by index when the LED counts differ).
 - **Bake** — write a painted canvas or Pixel Scene to the device as a
   single-frame GIF, uploaded to its filesystem and shown with the **Image**
   effect. No stream, no server involvement once baked; optionally `psave` it as a
-  preset so it survives a reboot.
+  preset so it survives a reboot. Bake targets the whole device, so it's offered
+  only for a fixture that covers its entire strip (not a sub-range or a matrix).
 
 ### System
 
@@ -335,10 +341,11 @@ WLED 16.0.0 (ESP32) and 16.0.1 (QuinLED Dig-Quad), including a genuine truncated
    **Scenes**, build a layer stack and **Stream this scene**. Confirm the
    fixtures light in canvas order and that editing the Layout re-maps them live.
    Stop releases the strips.
-5. **Paint:** pick a device, click a few LEDs — the strip should light them
+5. **Paint:** pick a fixture, click a few LEDs — the strip should light them
    immediately and keep tracking as you paint. Try Fill and the brightness
-   slider. **Stop & Release** returns the strip to its effect. Save a Pixel
-   Scene, clear, reload, confirm it comes back.
+   slider. On a matrix fixture, paint a corner cell and confirm the physically
+   lit LED is the matching corner. **Stop & Release** returns the strip to its
+   effect. Save a Pixel Scene, clear, reload, confirm it comes back.
 6. **Bake** (Paint → "Bake to device"): bake a canvas, confirm the strip shows it
    via the Image effect with no stream running. Add a preset slot, bake again,
    load that preset from the WLED app, confirm it survives a reboot.

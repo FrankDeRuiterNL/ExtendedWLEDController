@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -24,9 +25,9 @@ import BrushIcon from '@mui/icons-material/Brush';
 import ColorizeIcon from '@mui/icons-material/Colorize';
 import BackspaceIcon from '@mui/icons-material/Backspace';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import type { PixelScene, WledSegment, WledState } from '@ewc/core';
-import { useDevice, useDevices } from '../api/devices.js';
-import { useStartPaintStream, useStopStream, useStreamStatus } from '../api/stage.js';
+import { fixtureLedCount, matrixCell, type PixelScene } from '@ewc/core';
+import { useDevices } from '../api/devices.js';
+import { useInstallation, useStartPaintStream, useStopStream, useStreamStatus } from '../api/stage.js';
 import { useBake } from '../api/paint.js';
 import {
   fetchPixelScene,
@@ -44,11 +45,43 @@ type Tool = 'paint' | 'erase' | 'pick';
 const bare = (hex: string) => hex.replace(/^#/, '').toUpperCase();
 
 export function PaintPage() {
+  const { data: installation } = useInstallation();
   const { data: devices } = useDevices();
-  const [deviceId, setDeviceId] = useState<number | null>(null);
 
-  const effectiveId = deviceId ?? devices?.[0]?.id ?? null;
-  const { data: device } = useDevice(effectiveId ?? 0);
+  const fixtures = useMemo(
+    () => (installation?.fixtures ?? []).filter((f) => f.enabled),
+    [installation?.fixtures],
+  );
+
+  const [fixtureId, setFixtureId] = useState<string | null>(null);
+  const fixture = fixtures.find((f) => f.id === fixtureId) ?? fixtures[0] ?? null;
+
+  const device = devices?.find((d) => d.id === fixture?.deviceId) ?? null;
+  const deviceId = fixture?.deviceId ?? null;
+  const ledCount = fixture ? fixtureLedCount(fixture.geometry) : 0;
+  /** First LED of this fixture in the device's whole-strip wire index space. */
+  const wireStart = fixture?.startIndex ?? 0;
+
+  const isWholeDevice =
+    !!device && device.ledCount != null && wireStart === 0 && ledCount === device.ledCount;
+  const sharesDevice =
+    !!fixture && fixtures.filter((f) => f.deviceId === fixture.deviceId).length > 1;
+
+  // Matrix fixtures paint as a 2-D grid in their real wiring order. `matrixCell`
+  // takes a **fixture-local** wire index (0..ledCount-1) — the device offset is
+  // added later, once, via the stream's `segStart`.
+  const matrixGeom = fixture?.geometry.kind === 'matrix' ? fixture.geometry : null;
+  const matrixGrid = useMemo(() => {
+    if (!matrixGeom) return null;
+    const w = Math.max(1, Math.floor(matrixGeom.width));
+    const h = Math.max(1, Math.floor(matrixGeom.height));
+    const grid: number[][] = Array.from({ length: h }, () => Array<number>(w).fill(-1));
+    for (let localIndex = 0; localIndex < w * h; localIndex++) {
+      const { col, row } = matrixCell(localIndex, matrixGeom);
+      if (row >= 0 && row < h && col >= 0 && col < w) grid[row]![col] = localIndex;
+    }
+    return { w, h, grid };
+  }, [matrixGeom]);
 
   const { data: streamStatus } = useStreamStatus();
   const startPaintStream = useStartPaintStream();
@@ -58,21 +91,9 @@ export function PaintPage() {
   const createScene = useCreatePixelScene();
   const updateScene = useUpdatePixelScene();
   const deleteScene = useDeletePixelScene();
-  const bake = useBake(effectiveId ?? 0);
+  const bake = useBake(deviceId ?? 0);
 
-  const state: WledState = device?.state ?? {};
-  const segments = useMemo(
-    () => state.seg?.filter((s) => (s.stop ?? 0) > (s.start ?? 0) || s.id === state.mainseg) ?? [],
-    [state.seg, state.mainseg],
-  );
-  const [segId, setSegId] = useState<number | null>(null);
-  const activeSegId = segId ?? state.mainseg ?? segments[0]?.id ?? 0;
-  const segment: WledSegment = segments.find((s) => s.id === activeSegId) ?? { id: activeSegId };
-  const segStart = segment.start ?? 0;
-  const segStop = segment.stop ?? device?.ledCount ?? 0;
-  const segLen = Math.max(0, segStop - segStart);
-
-  // One entry per segment-relative LED: a `#rrggbb` string when lit, `null` = off.
+  // One entry per fixture LED (wire order): a `#rrggbb` string when lit, `null` = off.
   const [cells, setCells] = useState<Array<string | null>>([]);
   const [color, setColor] = useState('#ff8800');
   const [tool, setTool] = useState<Tool>('paint');
@@ -89,14 +110,16 @@ export function PaintPage() {
   /** True once the user has touched this canvas — keeps the live stream fed. */
   const [live, setLive] = useState(false);
 
-  // Reset everything when the target strip changes.
+  // Reset everything when the target fixture changes. Keyed on the id **and** the
+  // LED count: a Layout edit can resize a fixture's geometry without changing its
+  // id, and the canvas has to follow.
   useEffect(() => {
-    setCells(Array.from({ length: segLen }, () => null));
+    setCells(Array.from({ length: ledCount }, () => null));
     setLoadedSceneId(null);
     setLoadNote(null);
     setLive(false);
     setSceneAck(false);
-  }, [segLen, activeSegId, effectiveId]);
+  }, [fixture?.id, ledCount]);
 
   const dragging = useRef(false);
   useEffect(() => {
@@ -108,7 +131,7 @@ export function PaintPage() {
   const streamingThisDevice =
     streamStatus?.mode === 'paint' &&
     streamStatus.running &&
-    streamStatus.paint?.deviceId === effectiveId;
+    streamStatus.paint?.deviceId === deviceId;
 
   const sceneStreaming = streamStatus?.mode === 'scene' && streamStatus.running;
 
@@ -116,14 +139,14 @@ export function PaintPage() {
   // Everything the push needs is read through a ref so `doPush` stays identity-
   // stable — otherwise react-query's mutation object flipping isPending would
   // re-fire the debounce effect in a loop.
-  const pushArgs = useRef({ effectiveId, segStart, brightness, cells });
-  pushArgs.current = { effectiveId, segStart, brightness, cells };
+  const pushArgs = useRef({ deviceId, wireStart, brightness, cells });
+  pushArgs.current = { deviceId, wireStart, brightness, cells };
   const startPaintRef = useRef(startPaintStream);
   startPaintRef.current = startPaintStream;
   const push = useRef({ inFlight: false, pending: false });
 
   const doPush = useCallback(() => {
-    const { effectiveId: id, segStart: ss, brightness: bri, cells: cs } = pushArgs.current;
+    const { deviceId: id, wireStart: ss, brightness: bri, cells: cs } = pushArgs.current;
     if (!id) return;
     if (push.current.inFlight) {
       push.current.pending = true;
@@ -149,20 +172,21 @@ export function PaintPage() {
 
   // Debounced: any canvas / brightness change while "live" streams to the device.
   useEffect(() => {
-    if (!live || !effectiveId) return;
+    if (!live || !deviceId) return;
     if (sceneStreaming && !sceneAck) {
       setConfirmScene(true);
       return;
     }
     const t = setTimeout(doPush, 80);
     return () => clearTimeout(t);
-  }, [cells, brightness, live, effectiveId, sceneStreaming, sceneAck, doPush]);
+  }, [cells, brightness, live, deviceId, sceneStreaming, sceneAck, doPush]);
 
   const touchCell = (i: number) => {
+    if (i < 0) return;
     setLoadNote(null);
     setLive(true);
     setCells((prev) => {
-      if (i < 0 || i >= prev.length) return prev;
+      if (i >= prev.length) return prev;
       if (tool === 'pick') {
         if (prev[i]) setColor(prev[i]!);
         return prev;
@@ -198,7 +222,7 @@ export function PaintPage() {
 
   // --- pixel scenes -----------------------------------------------------
   const currentScene = (): PixelScene => ({
-    width: segLen,
+    width: ledCount,
     brightness,
     pixels: cells.map((c) => (c ? bare(c) : null)),
   });
@@ -226,7 +250,7 @@ export function PaintPage() {
     const dto = await fetchPixelScene(id);
     const s = dto.scene;
     setCells(
-      Array.from({ length: segLen }, (_, i) => {
+      Array.from({ length: ledCount }, (_, i) => {
         const p = s.pixels[i];
         return p ? `#${p.toLowerCase()}` : null;
       }),
@@ -236,8 +260,8 @@ export function PaintPage() {
     setSceneName(dto.name);
     setLive(true);
     setLoadNote(
-      s.width !== segLen
-        ? `“${dto.name}” was painted for ${s.width} LEDs; mapped onto this ${segLen}-LED segment by index.`
+      s.width !== ledCount
+        ? `“${dto.name}” was painted for ${s.width} LEDs; mapped onto this ${ledCount}-LED fixture by index.`
         : null,
     );
   };
@@ -248,22 +272,98 @@ export function PaintPage() {
   };
 
   // --- bake -----------------------------------------------------------
+  // Bake writes the **whole device** (`seg.n` + the Image effect on segment 0),
+  // so it's only offered for a fixture that covers its entire strip and isn't a
+  // 2-D matrix (a baked GIF is a 1-D row).
+  const canBake = isWholeDevice && !matrixGeom;
+  const bakeBlockedReason = !fixture
+    ? null
+    : !device
+      ? 'This fixture’s device is offline.'
+      : matrixGeom
+        ? 'Baking a matrix fixture isn’t supported yet — a baked GIF is a 1-D row.'
+        : !isWholeDevice
+          ? `“${fixture.name}” is LEDs ${wireStart}–${wireStart + ledCount} of ${device.name}. ` +
+            'Baking writes the whole device, so it’s only available for a fixture that covers its entire strip.'
+          : null;
+
   const presetSlot = () => {
     const n = Number(bakePreset);
     return Number.isInteger(n) && n >= 1 && n <= 250 ? n : undefined;
   };
   const bakeCanvas = () => {
-    if (!effectiveId || litCount === 0) return;
+    if (!deviceId || litCount === 0 || !canBake) return;
     bake.mutate({
-      segId: activeSegId,
+      segId: 0,
       preset: presetSlot(),
       name: sceneName.trim() ? sceneName.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20) : 'canvas',
       pixels: cells.map((c) => (c ? bare(c) : null)),
     });
   };
   const bakeScene = (id: number) => {
-    if (!effectiveId) return;
-    bake.mutate({ segId: activeSegId, preset: presetSlot(), sceneId: id });
+    if (!deviceId || !canBake) return;
+    bake.mutate({ segId: 0, preset: presetSlot(), sceneId: id });
+  };
+
+  const fixtureLabel = (f: (typeof fixtures)[number]) => {
+    const dev = devices?.find((d) => d.id === f.deviceId);
+    const n = fixtureLedCount(f.geometry);
+    const geom =
+      f.geometry.kind === 'matrix' ? `${f.geometry.width}×${f.geometry.height}` : `${n} LED${n === 1 ? '' : 's'}`;
+    return `${f.name} · ${dev?.name ?? `device ${f.deviceId}`} · ${geom}`;
+  };
+
+  if (fixtures.length === 0) {
+    return (
+      <Stack spacing={2}>
+        <Box>
+          <Typography variant="h3">Pixel painter</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Paint the LEDs of a fixture directly and stream the result to its device.
+          </Typography>
+        </Box>
+        <Alert
+          severity="info"
+          action={
+            <Button component={RouterLink} to="/layout" size="small" color="inherit">
+              Open Layout
+            </Button>
+          }
+        >
+          No fixtures yet. Define your fixtures on the <strong>Layout</strong> page first — the
+          painter works per fixture.
+        </Alert>
+      </Stack>
+    );
+  }
+
+  const cellBox = (localIndex: number, key: string | number) => {
+    const c = localIndex >= 0 ? cells[localIndex] ?? null : null;
+    const off = localIndex < 0;
+    return (
+      <Box
+        key={key}
+        title={off ? 'unwired' : `LED ${localIndex}${c ? ` · ${bare(c)}` : ' · off'}`}
+        onMouseDown={
+          off
+            ? undefined
+            : () => {
+                dragging.current = true;
+                touchCell(localIndex);
+              }
+        }
+        onMouseEnter={off ? undefined : () => dragging.current && touchCell(localIndex)}
+        sx={{
+          width: 16,
+          height: 16,
+          borderRadius: '3px',
+          cursor: off ? 'default' : 'crosshair',
+          bgcolor: off ? md3.surfaceContainerHigh : c ?? 'transparent',
+          opacity: off ? 0.4 : 1,
+          border: c && !off ? '1px solid rgba(255,255,255,0.25)' : `1px dashed ${md3.outline}`,
+        }}
+      />
+    );
   };
 
   return (
@@ -271,8 +371,8 @@ export function PaintPage() {
       <Box>
         <Typography variant="h3">Pixel painter</Typography>
         <Typography variant="body2" color="text.secondary">
-          Paint LEDs directly. The moment you touch the canvas the selected device switches to a
-          live stream from this page — every edit shows on the strip in real time. “Stop &amp;
+          Pick a fixture, paint its LEDs, and the moment you touch the canvas its device switches to
+          a live stream from this page — every edit shows on the strip in real time. “Stop &amp;
           Release” ends the stream and the device returns to its effect. Save a canvas as a{' '}
           <strong>Pixel Scene</strong> to reload it later.
         </Typography>
@@ -283,61 +383,42 @@ export function PaintPage() {
           <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap alignItems="center">
             <TextField
               select
-              label="Device"
+              label="Fixture"
               size="small"
-              value={effectiveId ?? ''}
-              onChange={(e) => {
-                setDeviceId(Number(e.target.value));
-                setSegId(null);
-              }}
-              sx={{ minWidth: 200 }}
+              value={fixture?.id ?? ''}
+              onChange={(e) => setFixtureId(e.target.value)}
+              sx={{ minWidth: 280 }}
             >
-              {(devices ?? []).map((d) => (
-                <MenuItem key={d.id} value={d.id}>
-                  {d.name}
+              {fixtures.map((f) => (
+                <MenuItem key={f.id} value={f.id}>
+                  {fixtureLabel(f)}
                 </MenuItem>
               ))}
             </TextField>
-
-            {segments.length > 1 ? (
-              <TextField
-                select
-                label="Segment"
-                size="small"
-                value={activeSegId}
-                onChange={(e) => setSegId(Number(e.target.value))}
-                sx={{ minWidth: 160 }}
-              >
-                {segments.map((s) => (
-                  <MenuItem key={s.id} value={s.id}>
-                    {s.n || `Segment ${s.id}`} ({s.start ?? 0}–{s.stop ?? 0})
-                  </MenuItem>
-                ))}
-              </TextField>
-            ) : (
-              <Chip
-                size="small"
-                variant="outlined"
-                label={`Segment ${activeSegId} · ${segStart}–${segStop} (${segLen} LED${segLen === 1 ? '' : 's'})`}
-              />
-            )}
 
             {streamingThisDevice && (
               <Chip size="small" color="success" label="Streaming to this device" />
             )}
           </Stack>
 
-          {device?.matrix && (
+          {sharesDevice && fixture && device && (
             <Alert severity="info" sx={{ mt: 2 }}>
-              This device is a {device.matrix.w}×{device.matrix.h} matrix. The painter treats it as a
-              1-D strip in wire order — a real 2-D grid needs the pixel mapping verified on a panel
-              first.
+              Painting <strong>{fixture.name}</strong> takes over its whole device (
+              {device.name}) — the other{' '}
+              {fixtures.filter((f) => f.deviceId === fixture.deviceId).length - 1} fixture(s) on it go
+              dark until you Stop &amp; Release.
+            </Alert>
+          )}
+
+          {!device && fixture && (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              Device {fixture.deviceId} for this fixture isn’t in the registry — nothing to stream to.
             </Alert>
           )}
         </CardContent>
       </Card>
 
-      {segLen > 0 && (
+      {ledCount > 0 && (
         <Card>
           <CardContent>
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap alignItems="center">
@@ -386,30 +467,37 @@ export function PaintPage() {
 
             <Divider sx={{ my: 2 }} />
 
-            <Box
-              sx={{ display: 'flex', flexWrap: 'wrap', gap: '3px', userSelect: 'none' }}
-              onMouseLeave={() => (dragging.current = false)}
-            >
-              {cells.map((c, i) => (
+            {matrixGrid ? (
+              <Box sx={{ overflowX: 'auto', pb: 1 }}>
                 <Box
-                  key={i}
-                  title={`LED ${i}${c ? ` · ${bare(c)}` : ' · off'}`}
-                  onMouseDown={() => {
-                    dragging.current = true;
-                    touchCell(i);
-                  }}
-                  onMouseEnter={() => dragging.current && touchCell(i)}
                   sx={{
-                    width: 16,
-                    height: 16,
-                    borderRadius: '3px',
-                    cursor: 'crosshair',
-                    bgcolor: c ?? 'transparent',
-                    border: c ? '1px solid rgba(255,255,255,0.25)' : `1px dashed ${md3.outline}`,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '3px',
+                    width: 'max-content',
+                    userSelect: 'none',
                   }}
-                />
-              ))}
-            </Box>
+                  onMouseLeave={() => (dragging.current = false)}
+                >
+                  {matrixGrid.grid.map((rowIdx, row) => (
+                    <Box key={row} sx={{ display: 'flex', gap: '3px' }}>
+                      {rowIdx.map((localIndex, col) => cellBox(localIndex, `${row}:${col}`))}
+                    </Box>
+                  ))}
+                </Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  {matrixGrid.w}×{matrixGrid.h} matrix, shown in its wiring order (first LED, serpentine
+                  and orientation from Layout).
+                </Typography>
+              </Box>
+            ) : (
+              <Box
+                sx={{ display: 'flex', flexWrap: 'wrap', gap: '3px', userSelect: 'none' }}
+                onMouseLeave={() => (dragging.current = false)}
+              >
+                {cells.map((_, i) => cellBox(i, i))}
+              </Box>
+            )}
 
             {loadNote && (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
@@ -428,7 +516,7 @@ export function PaintPage() {
                 Stop &amp; Release
               </Button>
               <Typography variant="body2" color="text.secondary">
-                {litCount} / {segLen} lit
+                {litCount} / {ledCount} lit
                 {streamingThisDevice ? ' · live' : ''}
               </Typography>
             </Stack>
@@ -442,7 +530,7 @@ export function PaintPage() {
         </Card>
       )}
 
-      {segLen > 0 && (
+      {ledCount > 0 && (
         <Card>
           <CardContent>
             <Typography variant="h5" gutterBottom>
@@ -453,41 +541,47 @@ export function PaintPage() {
               runs on the device with no stream. Add a preset slot to also save it as a preset that
               survives a reboot. The GIF filename is reused (overwritten) per bake.
             </Typography>
-            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap alignItems="center">
-              <TextField
-                size="small"
-                label="Preset slot (optional)"
-                type="number"
-                value={bakePreset}
-                onChange={(e) => setBakePreset(e.target.value)}
-                slotProps={{ htmlInput: { min: 1, max: 250 } }}
-                sx={{ width: 180 }}
-              />
-              <Button
-                variant="contained"
-                onClick={bakeCanvas}
-                disabled={bake.isPending || litCount === 0}
-              >
-                Bake canvas
-              </Button>
-            </Stack>
-            {bake.isError && (
-              <Alert severity="error" sx={{ mt: 2 }}>
-                {(bake.error as Error).message}
-              </Alert>
-            )}
-            {bake.isSuccess && !bake.isPending && (
-              <Alert severity="success" sx={{ mt: 2 }}>
-                Baked <code>{bake.data.filename}</code> ({bake.data.bytes} B)
-                {bake.data.preset != null ? `, saved as preset ${bake.data.preset}` : ''}
-                {bake.data.freeKbAfter != null ? ` · ${bake.data.freeKbAfter} KB free` : ''}.
-              </Alert>
+            {bakeBlockedReason ? (
+              <Alert severity="info">{bakeBlockedReason}</Alert>
+            ) : (
+              <>
+                <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap alignItems="center">
+                  <TextField
+                    size="small"
+                    label="Preset slot (optional)"
+                    type="number"
+                    value={bakePreset}
+                    onChange={(e) => setBakePreset(e.target.value)}
+                    slotProps={{ htmlInput: { min: 1, max: 250 } }}
+                    sx={{ width: 180 }}
+                  />
+                  <Button
+                    variant="contained"
+                    onClick={bakeCanvas}
+                    disabled={bake.isPending || litCount === 0}
+                  >
+                    Bake canvas
+                  </Button>
+                </Stack>
+                {bake.isError && (
+                  <Alert severity="error" sx={{ mt: 2 }}>
+                    {(bake.error as Error).message}
+                  </Alert>
+                )}
+                {bake.isSuccess && !bake.isPending && (
+                  <Alert severity="success" sx={{ mt: 2 }}>
+                    Baked <code>{bake.data.filename}</code> ({bake.data.bytes} B)
+                    {bake.data.preset != null ? `, saved as preset ${bake.data.preset}` : ''}
+                    {bake.data.freeKbAfter != null ? ` · ${bake.data.freeKbAfter} KB free` : ''}.
+                  </Alert>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
       )}
 
-      {segLen > 0 && (
+      {ledCount > 0 && (
         <Card>
           <CardContent>
             <Typography variant="h5" gutterBottom>
@@ -560,7 +654,7 @@ export function PaintPage() {
                       size="small"
                       variant="outlined"
                       onClick={() => bakeScene(s.id)}
-                      disabled={bake.isPending}
+                      disabled={bake.isPending || !canBake}
                     >
                       Bake
                     </Button>
@@ -579,10 +673,9 @@ export function PaintPage() {
         </Card>
       )}
 
-      {effectiveId && segLen === 0 && (
+      {fixture && ledCount === 0 && (
         <Alert severity="warning">
-          This device reports no addressable segment. Check that it is online and has LEDs
-          configured.
+          “{fixture.name}” has no LEDs. Check its geometry on the Layout page.
         </Alert>
       )}
 
