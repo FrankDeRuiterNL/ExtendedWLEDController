@@ -413,3 +413,6 @@ WLED 16.0.0 (ESP32) and 16.0.1 (QuinLED Dig-Quad), including a genuine truncated
 | GET/PUT/DELETE | `/api/installation/floorplan` | floorplan reference image |
 | GET | `/api/system/backup` | download the whole install as one `.zip` |
 | POST | `/api/system/restore` | upload a backup `.zip`, overwrite everything, restart |
+
+
+CODED BY CLAUDE, PROMPTED BY ME.
